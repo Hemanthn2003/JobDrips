@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="580" height="390" viewBox="160 0 580 390" role="img" aria-labelledby="title desc">
+  <title id="title">JobDrips</title>
+  <desc id="desc">JobDrips logo with a droplet mark and the tagline Connect Talent With Opportunities</desc>
+  <defs>
+    <linearGradient id="drop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8F3E28"/>
+      <stop offset="0.55" stop-color="#B76E4D"/>
+      <stop offset="1" stop-color="#E08A68"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#B8462D"/>
+      <stop offset="1" stop-color="#D86645"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#6D3A29" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+
+  <!-- Droplet mark -->
+  <g transform="translate(450 20)" filter="url(#softShadow)">
+    <path d="M0 0 C-17 29 -61 72 -61 111 C-61 151 -34 179 0 179 C34 179 61 151 61 111 C61 72 17 29 0 0Z" fill="url(#drop)"/>
+    <path d="M0 40 C-8 56 -27 78 -27 99 C-27 120 -15 135 0 135 C15 135 27 120 27 99 C27 78 8 56 0 40Z" fill="#F8E7DC" opacity="0.9"/>
+    <path d="M0 57 C-5 67 -13 78 -13 91 C-13 101 -8 108 0 108 C8 108 13 101 13 91 C13 78 5 67 0 57Z" fill="#B76E4D" opacity="0.75"/>
+    <circle cx="40" cy="36" r="7" fill="#D86645"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="450" y="292" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="92" font-weight="800" letter-spacing="-4">
+    <tspan fill="#171717">Job</tspan><tspan fill="url(#word)">Drips</tspan>
+  </text>
+
+  <!-- Tagline -->
+  <text x="450" y="350" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="600" fill="#4D423C" letter-spacing="0.2">
+    Connect Talent With Opportunities
+  </text>
+</svg>
