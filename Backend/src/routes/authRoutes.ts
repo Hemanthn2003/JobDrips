@@ -3,6 +3,7 @@ import { Router } from "express";
 import {
   googleCallback,
   googleLogin,
+  getCurrentUser,
   login,
   logout,
   refreshAccessToken,
@@ -13,6 +14,8 @@ import {
   verifyResetOtp,
   verifySignupOtp,
 } from "../controllers/authController.js";
+
+import { authenticate } from "../utils/authMiddleware.js";
 
 const router = Router();
 
@@ -34,6 +37,13 @@ router.post(
 router.post(
   "/login",
   login
+);
+
+/* CURRENT LOGGED-IN USER */
+router.get(
+  "/me",
+  authenticate,
+  getCurrentUser
 );
 
 router.post(

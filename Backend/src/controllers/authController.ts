@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { Request, Response } from "express";
 import { OAuth2Client } from "google-auth-library";
+import type { AuthenticatedRequest } from "../utils/authMiddleware.js";
 import jwt from "jsonwebtoken";
 import {
   clearAuthCookies,
@@ -54,13 +55,16 @@ const createOtpRecord = async (
 const issueLoginTokens = async (
   user: any,
   response: Response,
-  rememberMe = true
+  rememberMe = false
 ) => {
   const accessToken =
     createAccessToken(user);
 
   const refreshToken =
-    createRefreshToken(user);
+    createRefreshToken(
+      user,
+      rememberMe
+    );
 
   user.refreshTokenHash =
     hashValue(refreshToken);
@@ -688,6 +692,54 @@ export const logout = async (
     return response.json({
       message:
         "Logged out successfully.",
+    });
+  }
+};
+
+export const getCurrentUser = async (
+  request: AuthenticatedRequest,
+  response: Response
+) => {
+  try {
+    if (!request.userId) {
+      return response.status(401).json({
+        code: "UNAUTHORIZED",
+        message: "Authentication required.",
+      });
+    }
+
+    const user = await User.findById(
+      request.userId
+    ).select(
+      "-passwordHash -refreshTokenHash"
+    );
+
+    if (!user) {
+      return response.status(404).json({
+        code: "USER_NOT_FOUND",
+        message: "User not found.",
+      });
+    }
+
+    return response.json({
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        profilePhoto: user.profilePhoto,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "getCurrentUser:",
+      error
+    );
+
+    return response.status(500).json({
+      message:
+        "Unable to fetch current user.",
     });
   }
 };

@@ -69,17 +69,25 @@ export const createAccessToken = (user: UserDocument) => {
   );
 };
 
-export const createRefreshToken = (user: UserDocument) => {
+export const createRefreshToken = (
+  user: UserDocument,
+  rememberMe = false
+) => {
   const secret = getRequiredEnv("JWT_REFRESH_SECRET");
+
+  const expiresIn = rememberMe
+    ? "30d"
+    : (process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
 
   return jwt.sign(
     {
       sub: user._id.toString(),
       type: "refresh",
+      rememberMe,
     },
     secret,
     {
-      expiresIn: (process.env.REFRESH_TOKEN_EXPIRES_IN || "7d") as jwt.SignOptions["expiresIn"],
+      expiresIn: expiresIn as jwt.SignOptions["expiresIn"],
     }
   );
 };
@@ -95,15 +103,17 @@ export const setAuthCookies = (
   response: Response,
   accessToken: string,
   refreshToken: string,
-  rememberMe = true
+  rememberMe = false
 ) => {
   const accessMaxAge = parseDurationMs(
     process.env.ACCESS_TOKEN_EXPIRES_IN || "15m"
   );
 
-  const refreshMaxAge = parseDurationMs(
-    process.env.REFRESH_TOKEN_EXPIRES_IN || "7d"
-  );
+  const refreshMaxAge = rememberMe
+    ? 30 * 24 * 60 * 60 * 1000
+    : parseDurationMs(
+        process.env.REFRESH_TOKEN_EXPIRES_IN || "7d"
+      );
 
   response.cookie(
     ACCESS_COOKIE,

@@ -11,6 +11,7 @@ import Login from "./pages/Login/Login";
 
 import Signup from "./pages/Auth/Signup";
 import ForgotPassword from "./pages/Auth/ForgotPassword";
+import Profile from "./pages/Profile/Profile";
 
 function App() {
   const [showSplash, setShowSplash] =
@@ -57,6 +58,12 @@ function App() {
         element={
           <ForgotPassword />
         }
+      />
+
+      {/* PROFILE */}
+      <Route
+        path="/profile"
+        element={<Profile />}
       />
 
       {/* UNKNOWN URL */}

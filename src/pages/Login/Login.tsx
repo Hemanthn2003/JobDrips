@@ -134,7 +134,9 @@ const Login = () => {
 
       setFailedAttempts(0);
       setPassword("");
-      setSuccessMessage("Sign in successful. Welcome to JobDrips.");
+      navigate("/profile", {
+        replace: true,
+      });
     } catch {
       setInlineError(
         "Unable to connect to JobDrips server. Make sure the backend is running.",
