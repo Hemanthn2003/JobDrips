@@ -129,6 +129,7 @@ const Header = () => {
         <Link
           to="/recommendations"
           aria-label="Recommendations"
+          aria-current={isRecommendationsActive ? "page" : undefined}
           className={`
             flex
             h-[45px]
@@ -148,28 +149,24 @@ const Header = () => {
             lg:w-[60px]
             ${
               isRecommendationsActive
-                ? "scale-105 border-[var(--jd-dark-rose-gold)] bg-[var(--jd-champagne)] shadow-[0_0_22px_rgba(217,166,138,0.55)]"
-                : "border-[var(--jd-border)] bg-[var(--jd-rose-gold)] hover:scale-105 hover:bg-[var(--jd-dark-rose-gold)]"
+                ? "scale-105 border-[#71391F] bg-[#71391F] shadow-[0_3px_12px_rgba(113,57,31,0.30)]"
+                : "border-[#A9684E] bg-[#A9684E] hover:scale-105 hover:border-[#96563D] hover:bg-[#96563D]"
             }
           `}
         >
           <img
-            src={
-              isRecommendationsActive
-                ? "/assets/icons/header/recommendations-active.svg"
-                : "/assets/icons/header/recommendations.svg"
-            }
+            src="/assets/icons/header/recommendations-active.svg"
             alt=""
             className="
-              h-[28px]
-              w-[28px]
+              h-[34px]
+              w-[34px]
               object-contain
-              sm:h-[30px]
-              sm:w-[30px]
-              md:h-[33px]
-              md:w-[33px]
-              lg:h-[36px]
-              lg:w-[36px]
+              sm:h-[37px]
+              sm:w-[37px]
+              md:h-[41px]
+              md:w-[41px]
+              lg:h-[45px]
+              lg:w-[45px]
             "
           />
         </Link>
