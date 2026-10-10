@@ -5,13 +5,14 @@ import cookieParser from "cookie-parser";
 
 import authRoutes from "./routes/authRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
+import profileRoutes from "./routes/profileRoutes.js";
 
 const app = express();
 
 const clientUrl =
-  process.env.CLIENT_URL ||
-  "http://localhost:5173";
+  process.env.CLIENT_URL || "http://localhost:5173";
 
+// CORS configuration
 app.use(
   cors({
     origin: clientUrl,
@@ -19,6 +20,7 @@ app.use(
   })
 );
 
+// Request body parsing
 app.use(express.json());
 
 app.use(
@@ -27,30 +29,35 @@ app.use(
   })
 );
 
+// Cookie parsing
 app.use(cookieParser());
 
-app.get(
-  "/api/health",
-  (_request, response) => {
-    response.json({
-      success: true,
-      message: "JobDrips backend is running.",
-    });
-  }
-);
+// Backend health check
+app.get("/api/health", (_request, response) => {
+  response.json({
+    success: true,
+    message: "JobDrips backend is running.",
+  });
+});
 
+// Authentication routes
 app.use("/api/auth", authRoutes);
 
+// Cloudinary image upload routes
 app.use("/api/uploads", uploadRoutes);
 
-app.use(
-  (_request, response) => {
-    response.status(404).json({
-      message: "API route not found.",
-    });
-  }
-);
+// User profile routes
+// Keep all API routes before the 404 handler.
+app.use("/api/profiles", profileRoutes);
 
+// Handle unknown routes
+app.use((_request, response) => {
+  response.status(404).json({
+    message: "API route not found.",
+  });
+});
+
+// Global error handler
 app.use(
   (
     error: unknown,
