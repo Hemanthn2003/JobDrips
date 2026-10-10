@@ -571,17 +571,26 @@ export const refreshAccessToken = async (
   response: Response
 ) => {
   try {
+    /* =====================================================
+       GET REFRESH TOKEN FROM COOKIE
+    ====================================================== */
+
     const refreshToken =
-      request.cookies[
+      request.cookies?.[
         getRefreshTokenCookieName()
       ];
 
     if (!refreshToken) {
       return response.status(401).json({
+        code: "REFRESH_TOKEN_MISSING",
         message:
           "Refresh token is missing.",
       });
     }
+
+    /* =====================================================
+       GET REFRESH TOKEN SECRET
+    ====================================================== */
 
     const secret =
       process.env.JWT_REFRESH_SECRET;
@@ -592,21 +601,34 @@ export const refreshAccessToken = async (
       );
     }
 
+    /* =====================================================
+       VERIFY REFRESH TOKEN
+    ====================================================== */
+
     const payload =
       jwt.verify(
         refreshToken,
         secret
       ) as jwt.JwtPayload;
 
+    /* =====================================================
+       VALIDATE TOKEN
+    ====================================================== */
+
     if (
       payload.type !== "refresh" ||
       !payload.sub
     ) {
       return response.status(401).json({
+        code: "INVALID_REFRESH_TOKEN",
         message:
           "Invalid refresh token.",
       });
     }
+
+    /* =====================================================
+       FIND USER
+    ====================================================== */
 
     const user =
       await User.findById(
@@ -615,29 +637,80 @@ export const refreshAccessToken = async (
 
     if (
       !user ||
-      !user.refreshTokenHash ||
-      user.refreshTokenHash !==
-        hashValue(refreshToken)
+      !user.refreshTokenHash
     ) {
       return response.status(401).json({
+        code: "INVALID_REFRESH_TOKEN",
         message:
           "Refresh token is invalid.",
       });
     }
 
+    /* =====================================================
+       COMPARE STORED REFRESH TOKEN HASH
+    ====================================================== */
+
+    const incomingRefreshTokenHash =
+      hashValue(refreshToken);
+
+    if (
+      user.refreshTokenHash !==
+      incomingRefreshTokenHash
+    ) {
+      clearAuthCookies(response);
+
+      return response.status(401).json({
+        code: "INVALID_REFRESH_TOKEN",
+        message:
+          "Refresh token is invalid.",
+      });
+    }
+
+    /* =====================================================
+       PRESERVE REMEMBER ME
+       -----------------------------------------------------
+       This value was stored inside the refresh JWT when
+       the user originally logged in.
+    ====================================================== */
+
+    const rememberMe =
+      payload.rememberMe === true;
+
+    /* =====================================================
+       CREATE NEW ACCESS + REFRESH TOKENS
+       -----------------------------------------------------
+       If Remember Me was true:
+           new refresh token = 30 days
+
+       If Remember Me was false:
+           new refresh token = configured duration,
+           normally 7 days
+    ====================================================== */
+
     await issueLoginTokens(
       user,
-      response
+      response,
+      rememberMe
     );
+
+    /* =====================================================
+       RESPONSE
+    ====================================================== */
 
     return response.json({
       message:
         "Access token refreshed.",
     });
   } catch (error) {
+    console.error(
+      "refreshAccessToken:",
+      error
+    );
+
     clearAuthCookies(response);
 
     return response.status(401).json({
+      code: "SESSION_EXPIRED",
       message:
         "Session expired. Please sign in again.",
     });
@@ -832,18 +905,28 @@ export const googleCallback = async (
   response: Response
 ) => {
   try {
+    /* =====================================================
+       GET GOOGLE CALLBACK PARAMETERS
+    ====================================================== */
+
     const code = String(
       request.query.code || ""
     );
 
-    const receivedState =
-      String(
-        request.query.state || ""
-      );
+    const receivedState = String(
+      request.query.state || ""
+    );
+
+    /* =====================================================
+       GET STORED OAUTH STATE
+    ====================================================== */
 
     const storedState =
-      request.cookies
-        .jobdrips_google_state;
+      request.cookies?.jobdrips_google_state;
+
+    /* =====================================================
+       CLEAR GOOGLE STATE COOKIE
+    ====================================================== */
 
     response.clearCookie(
       "jobdrips_google_state",
@@ -857,20 +940,32 @@ export const googleCallback = async (
       }
     );
 
+    /* =====================================================
+       VALIDATE GOOGLE CALLBACK
+    ====================================================== */
+
     if (
       !code ||
       !receivedState ||
       !storedState ||
-      receivedState !==
-        storedState
+      receivedState !== storedState
     ) {
       return response.redirect(
         `${CLIENT_URL}/?googleError=state`
       );
     }
 
+    /* =====================================================
+       CREATE GOOGLE CLIENT
+    ====================================================== */
+
     const client =
       getGoogleClient();
+
+    /* =====================================================
+       EXCHANGE AUTHORIZATION CODE
+       FOR GOOGLE TOKENS
+    ====================================================== */
 
     const { tokens } =
       await client.getToken(code);
@@ -881,6 +976,10 @@ export const googleCallback = async (
       );
     }
 
+    /* =====================================================
+       GOOGLE CLIENT ID
+    ====================================================== */
+
     const googleClientId =
       process.env.GOOGLE_CLIENT_ID;
 
@@ -890,6 +989,10 @@ export const googleCallback = async (
       );
     }
 
+    /* =====================================================
+       VERIFY GOOGLE ID TOKEN
+    ====================================================== */
+
     const ticket =
       await client.verifyIdToken({
         idToken: tokens.id_token,
@@ -898,6 +1001,10 @@ export const googleCallback = async (
 
     const payload =
       ticket.getPayload();
+
+    /* =====================================================
+       VALIDATE GOOGLE USER INFORMATION
+    ====================================================== */
 
     if (
       !payload ||
@@ -909,26 +1016,50 @@ export const googleCallback = async (
       );
     }
 
+    /* =====================================================
+       NORMALIZE EMAIL
+    ====================================================== */
+
     const email =
-      normalizeEmail(payload.email);
+      normalizeEmail(
+        payload.email
+      );
+
+    /* =====================================================
+       FIND EXISTING USER
+    ====================================================== */
 
     let user =
-      await User.findOne({ email });
+      await User.findOne({
+        email,
+      });
+
+    /* =====================================================
+       CREATE USER IF IT DOES NOT EXIST
+    ====================================================== */
 
     if (!user) {
-      user = await User.create({
-        email,
-        googleId: payload.sub,
-        name:
-          payload.name || "",
-        profilePhoto:
-          payload.picture || "",
-        passwordHash: null,
-      });
+      user =
+        await User.create({
+          email,
+
+          googleId:
+            payload.sub,
+
+          name:
+            payload.name || "",
+
+          profilePhoto:
+            payload.picture || "",
+
+          passwordHash: null,
+        });
     } else {
-      if (
-        !user.googleId
-      ) {
+      /* ===================================================
+         EXISTING USER
+      ================================================== */
+
+      if (!user.googleId) {
         user.googleId =
           payload.sub;
       }
@@ -952,19 +1083,36 @@ export const googleCallback = async (
       await user.save();
     }
 
+    /* =====================================================
+       CREATE JOBDRIPS JWT TOKENS
+       AND SEND THEM AS HTTP-ONLY COOKIES
+    ====================================================== */
+
     await issueLoginTokens(
       user,
-      response
+      response,
+      false
     );
 
+    /* =====================================================
+       GOOGLE LOGIN SUCCESS
+       -----------------------------------------------
+       IMPORTANT:
+       Directly open the authenticated profile page.
+    ====================================================== */
+
     return response.redirect(
-      `${CLIENT_URL}/?google=success`
+      `${CLIENT_URL}/profile`
     );
   } catch (error) {
     console.error(
       "googleCallback:",
       error
     );
+
+    /* =====================================================
+       GOOGLE LOGIN FAILURE
+    ====================================================== */
 
     return response.redirect(
       `${CLIENT_URL}/?googleError=failed`

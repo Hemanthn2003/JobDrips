@@ -1,1 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none"><defs><linearGradient id="g" x1="16" y1="12" x2="80" y2="84" gradientUnits="userSpaceOnUse"><stop stop-color="#E8B99F"/><stop offset=".5" stop-color="#C97E5D"/><stop offset="1" stop-color="#9F4F35"/></linearGradient><filter id="s" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="7" stdDeviation="6" flood-color="#5A2E20" flood-opacity=".22"/></filter></defs><circle cx="48" cy="48" r="40" fill="url(#g)" stroke="#FFFDFC" stroke-width="4" filter="url(#s)"/><circle cx="48" cy="48" r="35" stroke="#F2D7C3" stroke-width="1.5" opacity=".8"/><path d="M48 22c-8.2 11.3-15.8 18.8-15.8 29.4C32.2 60.8 39.2 68 48 68s15.8-7.2 15.8-16.6C63.8 40.8 56.2 33.3 48 22Z" stroke="#FAF6F2" stroke-width="3.4" stroke-linejoin="round"/><path d="M48 35c-4.4 6-6.9 10.2-6.9 14.8 0 4.1 2.9 7.2 6.9 7.2s6.9-3.1 6.9-7.2c0-4.6-2.5-8.8-6.9-14.8Z" fill="#FAF6F2"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" fill="none">
+  <defs>
+    <radialGradient id="bg" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(32 25) rotate(50) scale(75)">
+      <stop stop-color="#D9A68A"/>
+      <stop offset=".42" stop-color="#A95D3E"/>
+      <stop offset="1" stop-color="#6E3526"/>
+    </radialGradient>
+    <filter id="shadow" x="-40%" y="-40%" width="180%" height="190%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#5A2E20" flood-opacity=".25"/>
+    </filter>
+  </defs>
+  <circle cx="48" cy="48" r="39.5" fill="url(#bg)" stroke="#FAF6F2" stroke-width="4" filter="url(#shadow)"/>
+  <circle cx="48" cy="48" r="34.5" stroke="#F2D7C3" stroke-opacity=".7" stroke-width="1.4"/>
+  <path d="M48 25.2c-7.6 10.6-14.6 18.1-14.6 27.8 0 8.7 6.35 15.5 14.6 15.5s14.6-6.8 14.6-15.5c0-9.7-7-17.2-14.6-27.8Z"
+        fill="#6E3526" stroke="#FAF6F2" stroke-width="2.6" stroke-linejoin="round"/>
+  <path d="M48 37.2c-3.6 5-5.6 8.4-5.6 12.3 0 3.4 2.35 5.9 5.6 5.9s5.6-2.5 5.6-5.9c0-3.9-2-7.3-5.6-12.3Z"
+        fill="#FAF6F2"/>
+</svg>

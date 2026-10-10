@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 104" fill="none">
+<defs>
+  <radialGradient id="halo" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(52 52) scale(50)">
+    <stop stop-color="#D9A68A" stop-opacity=".86"/>
+    <stop offset=".2" stop-color="#D9A68A" stop-opacity=".62"/>
+    <stop offset=".43" stop-color="#D9A68A" stop-opacity=".31"/>
+    <stop offset=".7" stop-color="#D9A68A" stop-opacity=".12"/>
+    <stop offset="1" stop-color="#D9A68A" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="blur" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="6"/></filter>
+  <filter id="shadow" x="-50%" y="-50%" width="200%" height="210%"><feDropShadow dx="0" dy="7" stdDeviation="5" flood-color="#4E251A" flood-opacity=".35"/></filter>
+  <linearGradient id="bg" x1="25" y1="15" x2="84" y2="92" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#A95D3E"/><stop offset=".52" stop-color="#7A3E2A"/><stop offset="1" stop-color="#55271D"/>
+  </linearGradient>
+</defs>
+<circle cx="52" cy="52" r="48" fill="url(#halo)" filter="url(#blur)">
+  <animate attributeName="r" values="43;50;43" dur="3s" repeatCount="indefinite"/>
+  <animate attributeName="opacity" values=".9;.48;.9" dur="3s" repeatCount="indefinite"/>
+</circle>
+<circle cx="52" cy="52" r="40.5" fill="url(#bg)" stroke="#FAF6F2" stroke-width="4" filter="url(#shadow)"/>
+<circle cx="52" cy="52" r="35.3" stroke="#D9A68A" stroke-opacity=".75" stroke-width="1.5"/>
+<path d="M52 29.2c-7.7 10.7-14.8 18.2-14.8 28 0 8.7 6.45 15.6 14.8 15.6s14.8-6.9 14.8-15.6c0-9.8-7.1-17.3-14.8-28Z"
+fill="#5E2B20" stroke="#FAF6F2" stroke-width="2.8" stroke-linejoin="round"/>
+<path d="M52 41c-3.5 4.9-5.5 8.3-5.5 12.1 0 3.4 2.3 5.8 5.5 5.8s5.5-2.4 5.5-5.8c0-3.8-2-7.2-5.5-12.1Z" fill="#FAF6F2"/>
+</svg>

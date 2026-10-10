@@ -1,3 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8F4C32" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-<path d="M3 10.8 12 3l9 7.8V21H5a2 2 0 0 1-2-2Z"/><path d="M9 21v-7h6v7"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+<defs>
+  <radialGradient id="halo" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(24 24) scale(23)">
+    <stop offset="0" stop-color="#D9A68A" stop-opacity=".78"/>
+    <stop offset=".22" stop-color="#D9A68A" stop-opacity=".52"/>
+    <stop offset=".48" stop-color="#D9A68A" stop-opacity=".24"/>
+    <stop offset=".72" stop-color="#D9A68A" stop-opacity=".09"/>
+    <stop offset="1" stop-color="#D9A68A" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="blur" x="-100%" y="-100%" width="300%" height="300%">
+    <feGaussianBlur stdDeviation="4.2"/>
+  </filter>
+  <filter id="soft" x="-100%" y="-100%" width="300%" height="300%">
+    <feGaussianBlur stdDeviation="1.4"/>
+  </filter>
+  <radialGradient id="icon" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(18 16) rotate(52) scale(25)">
+    <stop stop-color="#A95D3E"/>
+    <stop offset=".55" stop-color="#7A3E2A"/>
+    <stop offset="1" stop-color="#5B2A20"/>
+  </radialGradient>
+</defs>
+<g>
+  <circle cx="24" cy="24" r="20" fill="url(#halo)" filter="url(#blur)">
+    <animate attributeName="r" values="18;22;18" dur="2.8s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values=".8;.45;.8" dur="2.8s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="24" cy="24" r="14" fill="url(#halo)" filter="url(#soft)" opacity=".7"/>
+</g>
+<path d="M14.5 21.7 24 13.8l9.5 7.9a1.25 1.25 0 0 1-1.58 1.94l-.72-.59v8.18c0 1.08-.87 1.95-1.95 1.95h-10.5c-1.08 0-1.95-.87-1.95-1.95v-8.18l-.72.59a1.25 1.25 0 0 1-1.58-1.94Z" fill="url(#icon)"/>
+<path d="M20.9 33.15v-6.55h6.2v6.55" fill="#FAF6F2"/>
 </svg>

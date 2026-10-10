@@ -1,80 +1,88 @@
 import { useState } from "react";
-
-import {
-  Navigate,
-  Route,
-  Routes,
-} from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 
 import SplashScreen from "./pages/Login/SplashScreen";
 import Login from "./pages/Login/Login";
-
 import Signup from "./pages/Auth/Signup";
 import ForgotPassword from "./pages/Auth/ForgotPassword";
+
+import AppLayout from "./components/layout/AppLayout";
+
+import Feed from "./pages/Feed/Feed";
+import Recommendations from "./pages/Recommendations/Recommendations";
+import Messages from "./pages/Messages/Messages";
+import AddPost from "./pages/AddPost/AddPost";
+import Notifications from "./pages/Notifications/Notifications";
 import Profile from "./pages/Profile/Profile";
 
 function App() {
-  const [showSplash, setShowSplash] =
-    useState(true);
+  const [showSplash, setShowSplash] = useState(true);
 
   if (showSplash) {
     return (
       <SplashScreen
-        onComplete={() =>
-          setShowSplash(false)
-        }
+        onComplete={() => setShowSplash(false)}
       />
     );
   }
 
   return (
     <Routes>
-      {/* LOGIN */}
-      <Route
-        path="/"
-        element={<Login />}
-      />
+      {/* Authentication */}
+      <Route path="/" element={<Login />} />
 
-      {/* SIGN UP */}
       <Route
         path="/signup"
         element={<Signup />}
       />
 
-      {/* OLD REGISTER PATH → SIGN UP */}
       <Route
         path="/register"
-        element={
-          <Navigate
-            to="/signup"
-            replace
-          />
-        }
+        element={<Navigate to="/signup" replace />}
       />
 
-      {/* FORGOT PASSWORD */}
       <Route
         path="/forgot-password"
-        element={
-          <ForgotPassword />
-        }
+        element={<ForgotPassword />}
       />
 
-      {/* PROFILE */}
-      <Route
-        path="/profile"
-        element={<Profile />}
-      />
+      {/* Main JobDrips Application */}
+      <Route element={<AppLayout />}>
+        <Route
+          path="/feed"
+          element={<Feed />}
+        />
 
-      {/* UNKNOWN URL */}
+        <Route
+          path="/recommendations"
+          element={<Recommendations />}
+        />
+
+        <Route
+          path="/messages"
+          element={<Messages />}
+        />
+
+        <Route
+          path="/add-post"
+          element={<AddPost />}
+        />
+
+        <Route
+          path="/notifications"
+          element={<Notifications />}
+        />
+
+        <Route
+          path="/profile"
+          element={<Profile />}
+        />
+      </Route>
+
+      {/* Unknown URL */}
       <Route
         path="*"
-        element={
-          <Navigate
-            to="/"
-            replace
-          />
-        }
+        element={<Navigate to="/" replace />}
       />
     </Routes>
   );
