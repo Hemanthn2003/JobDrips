@@ -3,10 +3,6 @@ const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5000"
 ).replace(/\/+$/, "");
 
-// ==================================================
-// TYPES
-// ==================================================
-
 export interface UserInfo {
   id: string;
   email: string;
@@ -69,6 +65,7 @@ export interface Profile {
   posts?: unknown[];
   mentionedPosts?: unknown[];
   savedPosts?: unknown[];
+  postAccessRestricted?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -139,33 +136,26 @@ export interface ImageUpdateResponse {
   };
 }
 
-export interface PublicProfile {
-  userid: string;
-  username: string;
-  bio: string;
-  profileimage: string;
-  coverimage: string;
-  isPrivate: boolean;
-  education?: Education;
-  experience?: Experience[];
-  friends: Friend[];
-  posts?: unknown[];
-  postAccessRestricted: boolean;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
 export interface PublicProfileResponse {
   success: boolean;
-  data: PublicProfile;
+  data: Profile;
 }
 
-// ==================================================
-// COMMON API HELPER
-// ==================================================
+export interface UploadedImage {
+  secureUrl: string;
+  publicId: string;
+  format: string;
+  bytes: number;
+}
 
-async function profileRequest<T>(
-  endpoint: string,
+interface UploadImageResponse {
+  success: boolean;
+  message: string;
+  data: UploadedImage;
+}
+
+async function requestJson<T>(
+  url: string,
   options: RequestInit = {},
 ): Promise<T> {
   const headers = new Headers(options.headers);
@@ -178,14 +168,11 @@ async function profileRequest<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(
-    `${API_BASE_URL}/api/profiles${endpoint}`,
-    {
-      ...options,
-      headers,
-      credentials: "include",
-    },
-  );
+  const response = await fetch(url, {
+    ...options,
+    headers,
+    credentials: "include",
+  });
 
   const result: unknown = await response.json().catch(() => null);
 
@@ -196,7 +183,7 @@ async function profileRequest<T>(
       "message" in result &&
       typeof result.message === "string"
         ? result.message
-        : `Profile request failed (${response.status})`;
+        : `Request failed (${response.status})`;
 
     throw new Error(message);
   }
@@ -204,82 +191,92 @@ async function profileRequest<T>(
   return result as T;
 }
 
-// ==================================================
-// PROFILE SERVICE
-// ==================================================
+async function profileRequest<T>(
+  endpoint: string,
+  options: RequestInit = {},
+): Promise<T> {
+  return requestJson<T>(
+    `${API_BASE_URL}/api/profiles${endpoint}`,
+    options,
+  );
+}
 
 export const profileService = {
-  // GET /api/profiles/me
   getMyProfile(): Promise<ProfileResponse> {
-    return profileRequest<ProfileResponse>("/me");
+    return profileRequest("/me");
   },
 
-  // PATCH /api/profiles/me
+  getPublicProfile(
+    userid: string,
+  ): Promise<PublicProfileResponse> {
+    return profileRequest(`/${encodeURIComponent(userid)}`);
+  },
+
   updateMyProfile(
     data: ProfileUpdateData,
   ): Promise<ProfileResponse> {
-    return profileRequest<ProfileResponse>("/me", {
+    return profileRequest("/me", {
       method: "PATCH",
       body: JSON.stringify(data),
     });
   },
 
-  // PATCH /api/profiles/me/image
-  // Backend currently supports updating the profile image here.
   updateProfileImage(
     data: ImageUpdateData,
   ): Promise<ImageUpdateResponse> {
-    return profileRequest<ImageUpdateResponse>("/me/image", {
+    return profileRequest("/me/image", {
       method: "PATCH",
       body: JSON.stringify(data),
     });
   },
 
-  // POST /api/profiles/me/education
+  /**
+   * Uploads a local file to Cloudinary through the backend.
+   * Do not manually set Content-Type: the browser supplies
+   * the multipart boundary.
+   */
+  uploadImage(file: File): Promise<UploadImageResponse> {
+    const formData = new FormData();
+    formData.append("image", file);
+
+    return requestJson(
+      `${API_BASE_URL}/api/uploads/image`,
+      {
+        method: "POST",
+        body: formData,
+      },
+    );
+  },
+
   addEducation(
     data: EducationInput,
   ): Promise<EducationResponse> {
-    return profileRequest<EducationResponse>("/me/education", {
+    return profileRequest("/me/education", {
       method: "POST",
       body: JSON.stringify(data),
     });
   },
 
-  // DELETE /api/profiles/me/education/:id
   deleteEducation(id: string): Promise<EducationResponse> {
-    return profileRequest<EducationResponse>(
+    return profileRequest(
       `/me/education/${encodeURIComponent(id)}`,
       { method: "DELETE" },
     );
   },
 
-  // POST /api/profiles/me/experience
   addExperience(
     data: ExperienceInput,
   ): Promise<ExperienceResponse> {
-    return profileRequest<ExperienceResponse>(
-      "/me/experience",
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      },
-    );
+    return profileRequest("/me/experience", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
   },
 
-  // DELETE /api/profiles/me/experience/:id
   deleteExperience(id: string): Promise<ExperienceResponse> {
-    return profileRequest<ExperienceResponse>(
+    return profileRequest(
       `/me/experience/${encodeURIComponent(id)}`,
       { method: "DELETE" },
-    );
-  },
-
-  // GET /api/profiles/:userid
-  getPublicProfile(
-    userid: string,
-  ): Promise<PublicProfileResponse> {
-    return profileRequest<PublicProfileResponse>(
-      `/${encodeURIComponent(userid)}`,
     );
   },
 };
