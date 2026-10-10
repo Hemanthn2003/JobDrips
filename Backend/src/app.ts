@@ -1,8 +1,10 @@
+
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 
 import authRoutes from "./routes/authRoutes.js";
+import uploadRoutes from "./routes/uploadRoutes.js";
 
 const app = express();
 
@@ -17,9 +19,7 @@ app.use(
   })
 );
 
-app.use(
-  express.json()
-);
+app.use(express.json());
 
 app.use(
   express.urlencoded({
@@ -34,25 +34,19 @@ app.get(
   (_request, response) => {
     response.json({
       success: true,
-      message:
-        "JobDrips backend is running.",
+      message: "JobDrips backend is running.",
     });
   }
 );
 
-app.use(
-  "/api/auth",
-  authRoutes
-);
+app.use("/api/auth", authRoutes);
+
+app.use("/api/uploads", uploadRoutes);
 
 app.use(
-  (
-    _request,
-    response
-  ) => {
+  (_request, response) => {
     response.status(404).json({
-      message:
-        "API route not found.",
+      message: "API route not found.",
     });
   }
 );
@@ -67,8 +61,7 @@ app.use(
     console.error(error);
 
     response.status(500).json({
-      message:
-        "Internal server error.",
+      message: "Internal server error.",
     });
   }
 );
