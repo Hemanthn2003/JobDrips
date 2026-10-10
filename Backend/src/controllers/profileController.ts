@@ -1,22 +1,26 @@
-
 import type { Request, Response } from "express";
 import mongoose from "mongoose";
 import { randomUUID } from "node:crypto";
 
-import Profile from "../models/Profile.js";
+import Profile, { type IProfile } from "../models/Profile.js";
 import { User } from "../models/User.js";
 import type { AuthenticatedRequest } from "../utils/authMiddleware.js";
 
 type UnknownRecord = Record<string, unknown>;
+type ProfileDocument = InstanceType<typeof Profile>;
+type FriendshipSource = Pick<IProfile, "userid" | "friends">;
 
 type AuthenticatedUser = NonNullable<
   Awaited<ReturnType<typeof getAuthenticatedUser>>
 >;
 
-type ProfileDocument = InstanceType<typeof Profile>;
+const STORY_LIFETIME_MS = 24 * 60 * 60 * 1000;
+const USERNAME_PATTERN = /^[a-zA-Z0-9_.]{3,30}$/;
+const USERNAME_RULE =
+  "Username must be 3–30 characters and contain only letters, numbers, dots, or underscores.";
 
 // --------------------------------------------------
-// AUTHENTICATED USER
+// Helpers
 // --------------------------------------------------
 
 const getAuthenticatedUser = async (request: Request) => {
@@ -30,13 +34,9 @@ const getAuthenticatedUser = async (request: Request) => {
   }
 
   return User.findById(authenticatedRequest.userId).select(
-    "_id email name profilePhoto createdAt updatedAt"
+    "_id email name profilePhoto createdAt updatedAt",
   );
 };
-
-// --------------------------------------------------
-// COMMON HELPERS
-// --------------------------------------------------
 
 const normalizeUsername = (value: string): string =>
   value
@@ -53,112 +53,220 @@ const sendUnauthorized = (response: Response): void => {
   });
 };
 
+const sendBadRequest = (response: Response, message: string): void => {
+  response.status(400).json({ success: false, message });
+};
+
+const sendServerError = (response: Response, message: string): void => {
+  response.status(500).json({ success: false, message });
+};
+
+const isCloudinaryImageUrl = (value: string): boolean =>
+  /^https:\/\/res\.cloudinary\.com\/[^/]+\/image\/upload\//i.test(value);
+
+const isActive = (story: { expiresAt: Date | string }): boolean =>
+  new Date(story.expiresAt).getTime() > Date.now();
+
+const activeStories = (profile: Pick<IProfile, "stories">) =>
+  (profile.stories || []).filter(isActive);
+
+/** Both people must have accepted each other. */
+const areFriends = (a: FriendshipSource, b: FriendshipSource): boolean =>
+  a.friends.some(
+    (friend) => friend.userid === b.userid && friend.friendshipAccepted,
+  ) &&
+  b.friends.some(
+    (friend) => friend.userid === a.userid && friend.friendshipAccepted,
+  );
+
+/** Latest profile photos for a set of people, keyed by user id. */
+const getProfileImages = async (
+  userids: string[],
+): Promise<Map<string, string>> => {
+  const unique = [...new Set(userids.filter(Boolean))];
+  if (unique.length === 0) return new Map();
+
+  const found = await Profile.find({ userid: { $in: unique } }).select(
+    "userid profileimage",
+  );
+
+  return new Map(found.map((item) => [item.userid, item.profileimage || ""]));
+};
+
+/** Friends and requests, each with the person's current profile photo. */
+const attachPhotos = async (
+  profile: Pick<IProfile, "friends" | "requests">,
+) => {
+  const friends = profile.friends || [];
+  const requests = profile.requests || [];
+
+  const images = await getProfileImages([
+    ...friends.map((friend) => friend.userid),
+    ...requests.map((request) => request.profile.userid),
+  ]);
+
+  return {
+    friends: friends.map((friend) => ({
+      userid: friend.userid,
+      username: friend.username,
+      friendshipAccepted: friend.friendshipAccepted,
+      profileimage: images.get(friend.userid) ?? "",
+    })),
+    requests: requests.map((request) => ({
+      profile: {
+        userid: request.profile.userid,
+        username: request.profile.username,
+        bio: request.profile.bio,
+        profileimage:
+          images.get(request.profile.userid) ||
+          request.profile.profileimage ||
+          "",
+        education: request.profile.education,
+        experience: request.profile.experience,
+      },
+      accept: request.accept,
+      createdAt: request.createdAt,
+    })),
+  };
+};
+
+/** Owner, public profile, or accepted friend. */
+const canViewerAccess = async (
+  viewerId: string,
+  target: Pick<IProfile, "userid" | "isPrivate" | "friends">,
+): Promise<boolean> => {
+  if (viewerId === target.userid || !target.isPrivate) return true;
+
+  const viewerProfile = await Profile.findOne({ userid: viewerId }).select(
+    "userid friends",
+  );
+
+  return Boolean(viewerProfile && areFriends(viewerProfile, target));
+};
+
 /**
- * Finds the current user's profile.
- *
- * Existing profiles may use application-level userid values.
- * This function retains the existing username/userid lookup behavior.
- * Verify your database's ID mapping before relying on it for permissions.
+ * Stories as the given viewer should see them.
+ *  - seen:      has THIS viewer already watched the story?
+ *  - viewCount / viewers: only returned to the owner, and never include the
+ *    owner's own views.
  */
+const serializeStories = (
+  profile: Pick<IProfile, "userid" | "stories">,
+  viewerId: string,
+) => {
+  const isOwner = viewerId === profile.userid;
+
+  return activeStories(profile)
+    .slice()
+    .sort(
+      (a, b) =>
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    )
+    .map((story) => {
+      const viewers = story.viewers || [];
+      const base = {
+        storyId: story.storyId,
+        imageUrl: story.imageUrl,
+        createdAt: story.createdAt,
+        expiresAt: story.expiresAt,
+        seen: viewers.some((viewer) => viewer.userId === viewerId),
+      };
+
+      if (!isOwner) return base;
+
+      const others = viewers.filter(
+        (viewer) => viewer.userId !== profile.userid,
+      );
+
+      return {
+        ...base,
+        viewCount: others.length,
+        viewers: others.map((viewer) => ({
+          userId: viewer.userId,
+          email: viewer.email,
+          viewedAt: viewer.viewedAt,
+        })),
+      };
+    });
+};
+
 const getOrCreateProfile = async (
-  user: AuthenticatedUser
+  user: AuthenticatedUser,
 ): Promise<ProfileDocument> => {
-  const emailUsername = normalizeUsername(user.email.split("@")[0] || "");
-  const nameUsername = normalizeUsername(user.name || "");
+  const userid = user._id.toString();
 
-  const candidates: Array<Record<string, string>> = [
-    ...(emailUsername ? [{ username: emailUsername }] : []),
-    ...(nameUsername ? [{ username: nameUsername }] : []),
-    { userid: user._id.toString() },
-  ];
+  // CHANGED: look up by userid only. The old $or on username could return a
+  // different person's profile when their username matched this user's email.
+  const existing = await Profile.findOne({ userid });
+  if (existing) return existing;
 
-  const existingProfile = await Profile.findOne({
-    $or: candidates,
-  });
-
-  if (existingProfile) {
-    return existingProfile;
-  }
-
+  const fallback = `user${userid.slice(-8)}`;
   let username =
-    emailUsername ||
-    nameUsername ||
-    `user${user._id.toString().slice(-8)}`;
+    normalizeUsername(user.email.split("@")[0] || "") ||
+    normalizeUsername(user.name || "");
 
-  // Ensure the initial username does not conflict with another profile.
+  if (username.length < 3) username = fallback;
+
   if (await Profile.exists({ username })) {
-    username = `user${user._id.toString().slice(-8)}`;
-  }
-
-  // Do not silently create a duplicate profile for the same userid.
-  const existingById = await Profile.findOne({
-    userid: user._id.toString(),
-  });
-
-  if (existingById) {
-    return existingById;
+    username = `${username.slice(0, 20)}_${userid.slice(-8)}`;
   }
 
   return Profile.create({
-    userid: user._id.toString(),
+    userid,
     username,
     bio: "",
+    location: "",
+    website: "",
     profileimage: user.profilePhoto || "",
     coverimage: "",
     isPrivate: false,
-    education: {
-      school: [],
-      college: [],
-    },
+    education: { school: [], college: [] },
     experience: [],
     posts: [],
     mentionedPosts: [],
     savedPosts: [],
     friends: [],
     requests: [],
+    stories: [],
   });
 };
 
-const serializeOwnProfile = (
+const serializeOwnProfile = async (
   user: AuthenticatedUser,
-  profile: ProfileDocument
-) => ({
-  user: {
-    id: user._id.toString(),
-    email: user.email,
-    name: user.name,
-    profilePhoto: user.profilePhoto,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
-  },
+  profile: ProfileDocument,
+) => {
+  const { friends, requests } = await attachPhotos(profile);
 
-  profile: {
-    userid: profile.userid,
-    username: profile.username,
-    bio: profile.bio,
-    profileimage: profile.profileimage || user.profilePhoto || "",
-    coverimage: profile.coverimage || "",
-    isPrivate: profile.isPrivate,
-    education: profile.education,
-    experience: profile.experience,
-    friends: profile.friends,
-    requests: profile.requests,
-    posts: profile.posts,
-    mentionedPosts: profile.mentionedPosts,
-    savedPosts: profile.savedPosts,
-    createdAt: profile.createdAt,
-    updatedAt: profile.updatedAt,
-  },
-});
-
-const sendServerError = (
-  response: Response,
-  message: string
-): void => {
-  response.status(500).json({
-    success: false,
-    message,
-  });
+  return {
+    user: {
+      id: user._id.toString(),
+      email: user.email,
+      name: user.name,
+      profilePhoto: user.profilePhoto,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    },
+    profile: {
+      userid: profile.userid,
+      username: profile.username,
+      bio: profile.bio,
+      location: profile.location || "",
+      website: profile.website || "",
+      profileimage: profile.profileimage || user.profilePhoto || "",
+      coverimage: profile.coverimage || "",
+      isPrivate: profile.isPrivate,
+      education: profile.education,
+      experience: profile.experience,
+      friends,
+      requests,
+      posts: profile.posts,
+      mentionedPosts: profile.mentionedPosts,
+      savedPosts: profile.savedPosts,
+      stories: serializeStories(profile, user._id.toString()),
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
+    },
+  };
 };
 
 // --------------------------------------------------
@@ -168,7 +276,7 @@ const sendServerError = (
 
 export const getMyProfile = async (
   request: Request,
-  response: Response
+  response: Response,
 ): Promise<void> => {
   try {
     const user = await getAuthenticatedUser(request);
@@ -182,11 +290,10 @@ export const getMyProfile = async (
 
     response.status(200).json({
       success: true,
-      data: serializeOwnProfile(user, profile),
+      data: await serializeOwnProfile(user, profile),
     });
   } catch (error) {
     console.error("Get my profile failed:", error);
-
     sendServerError(response, "Unable to load your profile.");
   }
 };
@@ -198,7 +305,7 @@ export const getMyProfile = async (
 
 export const updateMyProfile = async (
   request: Request,
-  response: Response
+  response: Response,
 ): Promise<void> => {
   try {
     const user = await getAuthenticatedUser(request);
@@ -209,52 +316,53 @@ export const updateMyProfile = async (
     }
 
     const profile = await getOrCreateProfile(user);
-    const body = request.body as UnknownRecord;
+    const body = (request.body ?? {}) as UnknownRecord;
 
-    // Update only explicitly supported string fields.
-    const allowedTextFields = [
-      "bio",
-      "profileimage",
-      "coverimage",
-    ] as const;
+    // Plain text fields with a maximum length.
+    const textLimits = { bio: 500, location: 100, website: 200 } as const;
 
-    for (const field of allowedTextFields) {
+    for (const [field, max] of Object.entries(textLimits)) {
       const value = body[field];
-
-      if (value === undefined) {
-        continue;
-      }
+      if (value === undefined) continue;
 
       if (typeof value !== "string") {
-        response.status(400).json({
-          success: false,
-          message: `${field} must be a string.`,
-        });
+        sendBadRequest(response, `${field} must be a string.`);
         return;
       }
 
-      if (field === "bio" && value.length > 500) {
-        response.status(400).json({
-          success: false,
-          message: "Bio must be 500 characters or fewer.",
-        });
+      if (value.length > max) {
+        sendBadRequest(
+          response,
+          `${field} must be ${max} characters or fewer.`,
+        );
         return;
       }
 
       profile.set(field, value.trim());
     }
 
-    // Username validation and uniqueness check.
+    // Image URLs (profile photo and cover photo) must come from Cloudinary.
+    for (const field of ["profileimage", "coverimage"] as const) {
+      const value = body[field];
+      if (value === undefined) continue;
+
+      if (
+        typeof value !== "string" ||
+        (value !== "" && !isCloudinaryImageUrl(value))
+      ) {
+        sendBadRequest(response, `${field} must be a valid Cloudinary image URL.`);
+        return;
+      }
+
+      profile.set(field, value.trim());
+    }
+
     if (body.username !== undefined) {
       if (
         typeof body.username !== "string" ||
-        !/^[a-zA-Z0-9_.]{3,30}$/.test(body.username)
+        !USERNAME_PATTERN.test(body.username)
       ) {
-        response.status(400).json({
-          success: false,
-          message:
-            "Username must be 3–30 characters and contain only letters, numbers, dots, or underscores.",
-        });
+        sendBadRequest(response, USERNAME_RULE);
         return;
       }
 
@@ -263,7 +371,7 @@ export const updateMyProfile = async (
       const existing = await Profile.findOne({
         username,
         userid: { $ne: profile.userid },
-      });
+      }).select("_id");
 
       if (existing) {
         response.status(409).json({
@@ -276,70 +384,43 @@ export const updateMyProfile = async (
       profile.username = username;
     }
 
-    // Profile privacy.
     if (body.isPrivate !== undefined) {
       if (typeof body.isPrivate !== "boolean") {
-        response.status(400).json({
-          success: false,
-          message: "isPrivate must be a boolean.",
-        });
+        sendBadRequest(response, "isPrivate must be a boolean.");
         return;
       }
 
       profile.isPrivate = body.isPrivate;
     }
 
-    // Education arrays.
     if (body.education !== undefined) {
       if (
         !body.education ||
         typeof body.education !== "object" ||
         Array.isArray(body.education)
       ) {
-        response.status(400).json({
-          success: false,
-          message: "education must be an object.",
-        });
+        sendBadRequest(response, "education must be an object.");
         return;
       }
 
       const education = body.education as UnknownRecord;
 
       for (const key of ["school", "college"]) {
-        if (
-          education[key] !== undefined &&
-          !Array.isArray(education[key])
-        ) {
-          response.status(400).json({
-            success: false,
-            message: `education.${key} must be an array.`,
-          });
+        if (education[key] !== undefined && !Array.isArray(education[key])) {
+          sendBadRequest(response, `education.${key} must be an array.`);
           return;
         }
       }
 
       profile.education = {
-        school: (
-          education.school ??
-          profile.education?.school ??
-          []
-        ) as never,
-
-        college: (
-          education.college ??
-          profile.education?.college ??
-          []
-        ) as never,
+        school: (education.school ?? profile.education?.school ?? []) as never,
+        college: (education.college ?? profile.education?.college ?? []) as never,
       };
     }
 
-    // Experience array.
     if (body.experience !== undefined) {
       if (!Array.isArray(body.experience)) {
-        response.status(400).json({
-          success: false,
-          message: "experience must be an array.",
-        });
+        sendBadRequest(response, "experience must be an array.");
         return;
       }
 
@@ -348,16 +429,15 @@ export const updateMyProfile = async (
 
     await profile.save();
 
-    // Keep the User account photo synchronized.
     if (typeof body.profileimage === "string") {
-      user.profilePhoto = body.profileimage.trim();
+      user.profilePhoto = profile.profileimage;
       await user.save();
     }
 
     response.status(200).json({
       success: true,
       message: "Profile updated successfully.",
-      data: serializeOwnProfile(user, profile),
+      data: await serializeOwnProfile(user, profile),
     });
   } catch (error) {
     console.error("Update profile failed:", error);
@@ -395,7 +475,7 @@ export const updateMyProfile = async (
 
 export const updateProfileImage = async (
   request: Request,
-  response: Response
+  response: Response,
 ): Promise<void> => {
   try {
     const user = await getAuthenticatedUser(request);
@@ -405,20 +485,15 @@ export const updateProfileImage = async (
       return;
     }
 
-    const { profileimage } = request.body as {
+    const { profileimage } = (request.body ?? {}) as {
       profileimage?: unknown;
     };
 
     if (
       typeof profileimage !== "string" ||
-      !/^https:\/\/res\.cloudinary\.com\/[^/]+\/image\/upload\//.test(
-        profileimage
-      )
+      !isCloudinaryImageUrl(profileimage)
     ) {
-      response.status(400).json({
-        success: false,
-        message: "Provide a valid Cloudinary secure image URL.",
-      });
+      sendBadRequest(response, "Provide a valid Cloudinary secure image URL.");
       return;
     }
 
@@ -440,11 +515,7 @@ export const updateProfileImage = async (
     });
   } catch (error) {
     console.error("Update profile image failed:", error);
-
-    sendServerError(
-      response,
-      "Unable to update your profile image."
-    );
+    sendServerError(response, "Unable to update your profile image.");
   }
 };
 
@@ -455,7 +526,7 @@ export const updateProfileImage = async (
 
 export const addEducation = async (
   request: Request,
-  response: Response
+  response: Response,
 ): Promise<void> => {
   try {
     const user = await getAuthenticatedUser(request);
@@ -465,19 +536,15 @@ export const addEducation = async (
       return;
     }
 
-    const body = request.body as UnknownRecord;
+    const body = (request.body ?? {}) as UnknownRecord;
     const type = body.type;
 
     if (type !== "school" && type !== "college") {
-      response.status(400).json({
-        success: false,
-        message: "type must be school or college.",
-      });
+      sendBadRequest(response, "type must be school or college.");
       return;
     }
 
     const startYear = Number(body.startYear);
-
     const endYear =
       body.endYear === "" ||
       body.endYear === null ||
@@ -492,14 +559,9 @@ export const addEducation = async (
       startYear < 1900 ||
       startYear > 2200 ||
       (endYear !== null &&
-        (!Number.isInteger(endYear) ||
-          endYear < startYear ||
-          endYear > 2200))
+        (!Number.isInteger(endYear) || endYear < startYear || endYear > 2200))
     ) {
-      response.status(400).json({
-        success: false,
-        message: "Provide a name and valid start/end years.",
-      });
+      sendBadRequest(response, "Provide a name and valid start/end years.");
       return;
     }
 
@@ -510,10 +572,7 @@ export const addEducation = async (
       profile.education.school.push({
         schoolId: id,
         name: body.name.trim(),
-        board:
-          typeof body.board === "string"
-            ? body.board.trim()
-            : "",
+        board: typeof body.board === "string" ? body.board.trim() : "",
         startYear,
         endYear,
       } as never);
@@ -521,14 +580,8 @@ export const addEducation = async (
       profile.education.college.push({
         collegeId: id,
         name: body.name.trim(),
-        degree:
-          typeof body.degree === "string"
-            ? body.degree.trim()
-            : "",
-        field:
-          typeof body.field === "string"
-            ? body.field.trim()
-            : "",
+        degree: typeof body.degree === "string" ? body.degree.trim() : "",
+        field: typeof body.field === "string" ? body.field.trim() : "",
         startYear,
         endYear,
       } as never);
@@ -564,7 +617,7 @@ export const addEducation = async (
 
 export const deleteEducation = async (
   request: Request,
-  response: Response
+  response: Response,
 ): Promise<void> => {
   try {
     const user = await getAuthenticatedUser(request);
@@ -578,22 +631,18 @@ export const deleteEducation = async (
     const id = request.params.id;
 
     const originalCount =
-      profile.education.school.length +
-      profile.education.college.length;
+      profile.education.school.length + profile.education.college.length;
 
-    profile.education.school =
-      profile.education.school.filter(
-        (item) => item.schoolId !== id
-      ) as never;
+    profile.education.school = profile.education.school.filter(
+      (item) => item.schoolId !== id,
+    ) as never;
 
-    profile.education.college =
-      profile.education.college.filter(
-        (item) => item.collegeId !== id
-      ) as never;
+    profile.education.college = profile.education.college.filter(
+      (item) => item.collegeId !== id,
+    ) as never;
 
     const newCount =
-      profile.education.school.length +
-      profile.education.college.length;
+      profile.education.school.length + profile.education.college.length;
 
     if (newCount === originalCount) {
       response.status(404).json({
@@ -612,7 +661,6 @@ export const deleteEducation = async (
     });
   } catch (error) {
     console.error("Delete education failed:", error);
-
     sendServerError(response, "Unable to delete education.");
   }
 };
@@ -624,7 +672,7 @@ export const deleteEducation = async (
 
 export const addExperience = async (
   request: Request,
-  response: Response
+  response: Response,
 ): Promise<void> => {
   try {
     const user = await getAuthenticatedUser(request);
@@ -634,7 +682,7 @@ export const addExperience = async (
       return;
     }
 
-    const body = request.body as UnknownRecord;
+    const body = (request.body ?? {}) as UnknownRecord;
 
     if (
       typeof body.role !== "string" ||
@@ -642,10 +690,7 @@ export const addExperience = async (
       typeof body.startDate !== "string" ||
       !body.startDate.trim()
     ) {
-      response.status(400).json({
-        success: false,
-        message: "role and startDate are required.",
-      });
+      sendBadRequest(response, "role and startDate are required.");
       return;
     }
 
@@ -653,29 +698,20 @@ export const addExperience = async (
 
     profile.experience.push({
       experienceId: randomUUID(),
-      company:
-        typeof body.company === "string"
-          ? body.company.trim()
-          : "",
+      company: typeof body.company === "string" ? body.company.trim() : "",
       role: body.role.trim(),
       employmentType:
         typeof body.employmentType === "string"
           ? body.employmentType.trim()
           : "",
-      location:
-        typeof body.location === "string"
-          ? body.location.trim()
-          : "",
+      location: typeof body.location === "string" ? body.location.trim() : "",
       startDate: body.startDate.trim(),
       endDate:
-        typeof body.endDate === "string" &&
-        body.endDate.trim()
+        typeof body.endDate === "string" && body.endDate.trim()
           ? body.endDate.trim()
           : "Present",
       description:
-        typeof body.description === "string"
-          ? body.description.trim()
-          : "",
+        typeof body.description === "string" ? body.description.trim() : "",
     } as never);
 
     await profile.save();
@@ -708,7 +744,7 @@ export const addExperience = async (
 
 export const deleteExperience = async (
   request: Request,
-  response: Response
+  response: Response,
 ): Promise<void> => {
   try {
     const user = await getAuthenticatedUser(request);
@@ -720,11 +756,10 @@ export const deleteExperience = async (
 
     const profile = await getOrCreateProfile(user);
     const id = request.params.id;
-
     const originalCount = profile.experience.length;
 
     profile.experience = profile.experience.filter(
-      (item) => item.experienceId !== id
+      (item) => item.experienceId !== id,
     ) as never;
 
     if (profile.experience.length === originalCount) {
@@ -744,8 +779,261 @@ export const deleteExperience = async (
     });
   } catch (error) {
     console.error("Delete experience failed:", error);
-
     sendServerError(response, "Unable to delete experience.");
+  }
+};
+
+// --------------------------------------------------
+// CREATE STORY
+// POST /api/profiles/me/stories
+// Body: { imageUrl: Cloudinary secure URL }
+// Each story expires 24 hours after its own upload time.
+// --------------------------------------------------
+
+export const createStory = async (
+  request: Request,
+  response: Response,
+): Promise<void> => {
+  try {
+    const user = await getAuthenticatedUser(request);
+
+    if (!user) {
+      sendUnauthorized(response);
+      return;
+    }
+
+    const { imageUrl } = (request.body ?? {}) as { imageUrl?: unknown };
+
+    if (typeof imageUrl !== "string" || !isCloudinaryImageUrl(imageUrl)) {
+      sendBadRequest(response, "A valid Cloudinary image URL is required.");
+      return;
+    }
+
+    const profile = await getOrCreateProfile(user);
+    const now = new Date();
+
+    // Drop expired stories whenever a new one is published.
+    profile.stories = activeStories(profile) as never;
+
+    const story = {
+      storyId: randomUUID(),
+      imageUrl,
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + STORY_LIFETIME_MS),
+      viewers: [],
+    };
+
+    profile.stories.push(story as never);
+    await profile.save();
+
+    response.status(201).json({
+      success: true,
+      message: "Story published successfully.",
+      data: {
+        story: {
+          storyId: story.storyId,
+          imageUrl: story.imageUrl,
+          createdAt: story.createdAt,
+          expiresAt: story.expiresAt,
+          seen: false,
+          viewCount: 0,
+          viewers: [],
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Create story failed:", error);
+    sendServerError(response, "Unable to publish your story.");
+  }
+};
+
+// --------------------------------------------------
+// GET STORIES
+// GET /api/profiles/:userid/stories
+// --------------------------------------------------
+
+export const getStories = async (
+  request: Request,
+  response: Response,
+): Promise<void> => {
+  try {
+    const viewer = await getAuthenticatedUser(request);
+
+    if (!viewer) {
+      sendUnauthorized(response);
+      return;
+    }
+
+    const userid = request.params.userid;
+
+    if (!userid) {
+      sendBadRequest(response, "A user ID is required.");
+      return;
+    }
+
+    const target = await Profile.findOne({ userid }).select(
+      "userid username profileimage isPrivate friends stories",
+    );
+
+    if (!target) {
+      response.status(404).json({
+        success: false,
+        message: "Profile not found.",
+      });
+      return;
+    }
+
+    const viewerId = viewer._id.toString();
+
+    if (!(await canViewerAccess(viewerId, target))) {
+      response.status(403).json({
+        success: false,
+        message:
+          "Stories on this private profile are only available to accepted friends.",
+      });
+      return;
+    }
+
+    response.status(200).json({
+      success: true,
+      data: {
+        userid: target.userid,
+        username: target.username,
+        profileimage: target.profileimage,
+        stories: serializeStories(target, viewerId),
+      },
+    });
+  } catch (error) {
+    console.error("Get stories failed:", error);
+    sendServerError(response, "Unable to load stories.");
+  }
+};
+
+// --------------------------------------------------
+// RECORD A STORY VIEW
+// POST /api/profiles/:userid/stories/:storyId/view
+// Saves the viewer's user id + email on the story. Safe to call more than
+// once: a person is only recorded once per story.
+// --------------------------------------------------
+
+export const viewStory = async (
+  request: Request,
+  response: Response,
+): Promise<void> => {
+  try {
+    const viewer = await getAuthenticatedUser(request);
+
+    if (!viewer) {
+      sendUnauthorized(response);
+      return;
+    }
+
+    const { userid, storyId } = request.params;
+
+    if (!userid || !storyId) {
+      sendBadRequest(response, "A user ID and story ID are required.");
+      return;
+    }
+
+    const target = await Profile.findOne({ userid }).select(
+      "userid isPrivate friends",
+    );
+
+    if (!target) {
+      response.status(404).json({
+        success: false,
+        message: "Profile not found.",
+      });
+      return;
+    }
+
+    const viewerId = viewer._id.toString();
+
+    if (!(await canViewerAccess(viewerId, target))) {
+      response.status(403).json({
+        success: false,
+        message: "You can't view stories on this private profile.",
+      });
+      return;
+    }
+
+    const now = new Date();
+
+    // Only matches an active story this viewer has not been recorded on yet.
+    const result = await Profile.updateOne(
+      {
+        userid,
+        stories: {
+          $elemMatch: {
+            storyId,
+            expiresAt: { $gt: now },
+            "viewers.userId": { $ne: viewerId },
+          },
+        },
+      },
+      {
+        $push: {
+          "stories.$.viewers": {
+            userId: viewerId,
+            email: viewer.email,
+            viewedAt: now,
+          },
+        },
+      },
+    );
+
+    response.status(200).json({
+      success: true,
+      recorded: result.modifiedCount > 0,
+    });
+  } catch (error) {
+    console.error("Record story view failed:", error);
+    sendServerError(response, "Unable to record the story view.");
+  }
+};
+
+// --------------------------------------------------
+// DELETE STORY
+// DELETE /api/profiles/me/stories/:storyId
+// --------------------------------------------------
+
+export const deleteStory = async (
+  request: Request,
+  response: Response,
+): Promise<void> => {
+  try {
+    const user = await getAuthenticatedUser(request);
+
+    if (!user) {
+      sendUnauthorized(response);
+      return;
+    }
+
+    const profile = await getOrCreateProfile(user);
+    const storyId = request.params.storyId;
+    const previousCount = profile.stories.length;
+
+    profile.stories = profile.stories.filter(
+      (story) => story.storyId !== storyId,
+    ) as never;
+
+    if (profile.stories.length === previousCount) {
+      response.status(404).json({
+        success: false,
+        message: "Story not found.",
+      });
+      return;
+    }
+
+    await profile.save();
+
+    response.status(200).json({
+      success: true,
+      message: "Story deleted successfully.",
+    });
+  } catch (error) {
+    console.error("Delete story failed:", error);
+    sendServerError(response, "Unable to delete story.");
   }
 };
 
@@ -756,17 +1044,14 @@ export const deleteExperience = async (
 
 export const getPublicProfile = async (
   request: Request,
-  response: Response
+  response: Response,
 ): Promise<void> => {
   try {
-    const user = await getAuthenticatedUser(request);
+    const viewer = await getAuthenticatedUser(request);
     const userid = request.params.userid;
 
     if (!userid) {
-      response.status(400).json({
-        success: false,
-        message: "A user ID is required.",
-      });
+      sendBadRequest(response, "A user ID is required.");
       return;
     }
 
@@ -780,75 +1065,50 @@ export const getPublicProfile = async (
       return;
     }
 
-    const isOwner = Boolean(
-      user && target.userid === user._id.toString()
-    );
+    const viewerId = viewer ? viewer._id.toString() : "";
+    const isOwner = viewerId !== "" && viewerId === target.userid;
 
-    let viewerProfile: ProfileDocument | null = null;
+    let isFriend = false;
 
-    if (user) {
-      const emailUsername = normalizeUsername(
-        user.email.split("@")[0] || ""
+    if (viewer && !isOwner) {
+      const viewerProfile = await Profile.findOne({ userid: viewerId }).select(
+        "userid friends",
       );
 
-      const nameUsername = normalizeUsername(user.name || "");
-
-      const candidates: Array<Record<string, string>> = [
-        ...(emailUsername
-          ? [{ username: emailUsername }]
-          : []),
-        ...(nameUsername
-          ? [{ username: nameUsername }]
-          : []),
-        { userid: user._id.toString() },
-      ];
-
-      viewerProfile = await Profile.findOne({
-        $or: candidates,
-      });
+      isFriend = Boolean(viewerProfile && areFriends(viewerProfile, target));
     }
 
-    // Require the friendship to be accepted on both profiles.
-    const isFriend = Boolean(
-      viewerProfile &&
-        viewerProfile.friends.some(
-          (friend) =>
-            friend.userid === target.userid &&
-            friend.friendshipAccepted
-        ) &&
-        target.friends.some(
-          (friend) =>
-            friend.userid === viewerProfile?.userid &&
-            friend.friendshipAccepted
-        )
-    );
+    const canSeePosts = isOwner || !target.isPrivate || isFriend;
 
-    const canSeePosts =
-      isOwner || !target.isPrivate || isFriend;
+    // The profile document only stores the username; the display name lives on the user.
+    const owner = mongoose.isValidObjectId(target.userid)
+      ? await User.findById(target.userid).select("name")
+      : null;
+
+    const { friends: friendsWithPhotos } = await attachPhotos({
+      friends: target.friends.filter((friend) => friend.friendshipAccepted),
+      requests: [],
+    });
 
     response.status(200).json({
       success: true,
       data: {
         userid: target.userid,
+        name: owner?.name || "",
         username: target.username,
         bio: target.bio,
+        location: target.location || "",
+        website: target.website || "",
         profileimage: target.profileimage,
         coverimage: target.coverimage,
         isPrivate: target.isPrivate,
-
-        education: canSeePosts
-          ? target.education
-          : undefined,
-
-        experience: canSeePosts
-          ? target.experience
-          : undefined,
-
-        friends: target.friends.filter(
-          (friend) => friend.friendshipAccepted
-        ),
-
+        education: canSeePosts ? target.education : undefined,
+        experience: canSeePosts ? target.experience : undefined,
+        friends: friendsWithPhotos,
         posts: canSeePosts ? target.posts : [],
+        mentionedPosts: canSeePosts ? target.mentionedPosts : [],
+        savedPosts: isOwner ? target.savedPosts : [],
+        stories: canSeePosts ? serializeStories(target, viewerId) : [],
         postAccessRestricted: !canSeePosts,
         createdAt: target.createdAt,
         updatedAt: target.updatedAt,
@@ -856,10 +1116,67 @@ export const getPublicProfile = async (
     });
   } catch (error) {
     console.error("Get public profile failed:", error);
+    sendServerError(response, "Unable to load this profile.");
+  }
+};
 
-    sendServerError(
-      response,
-      "Unable to load this profile."
-    );
+// --------------------------------------------------
+// CHECK USERNAME AVAILABILITY
+// GET /api/profiles/username-availability?username=...
+// --------------------------------------------------
+
+export const checkUsernameAvailability = async (
+  request: Request,
+  response: Response,
+): Promise<void> => {
+  try {
+    const user = await getAuthenticatedUser(request);
+
+    if (!user) {
+      sendUnauthorized(response);
+      return;
+    }
+
+    const rawUsername = request.query.username;
+
+    if (typeof rawUsername !== "string") {
+      sendBadRequest(response, "A username is required.");
+      return;
+    }
+
+    const username = rawUsername.trim().toLowerCase();
+
+    if (!USERNAME_PATTERN.test(username)) {
+      response.status(200).json({
+        success: true,
+        data: {
+          username,
+          available: false,
+          valid: false,
+          message: "Use 3–30 letters, numbers, dots, or underscores.",
+        },
+      });
+      return;
+    }
+
+    const existing = await Profile.findOne({
+      username,
+      userid: { $ne: user._id.toString() },
+    }).select("_id");
+
+    response.status(200).json({
+      success: true,
+      data: {
+        username,
+        available: !existing,
+        valid: true,
+        message: existing
+          ? "This username is already taken."
+          : "This username is available.",
+      },
+    });
+  } catch (error) {
+    console.error("Check username failed:", error);
+    sendServerError(response, "Unable to check username.");
   }
 };

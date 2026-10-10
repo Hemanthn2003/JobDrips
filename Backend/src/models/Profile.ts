@@ -1,4 +1,3 @@
-
 import mongoose, { Schema, type Document } from "mongoose";
 
 // -------------------- SCHOOL --------------------
@@ -11,7 +10,7 @@ const schoolSchema = new Schema(
     startYear: { type: Number, required: true },
     endYear: { type: Number, default: null },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- COLLEGE --------------------
@@ -25,7 +24,7 @@ const collegeSchema = new Schema(
     startYear: { type: Number, required: true },
     endYear: { type: Number, default: null },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- EDUCATION --------------------
@@ -35,15 +34,16 @@ const educationSchema = new Schema(
     school: { type: [schoolSchema], default: [] },
     college: { type: [collegeSchema], default: [] },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- EXPERIENCE --------------------
+// CHANGED: company is optional (the addExperience controller allows it to be empty).
 
 const experienceSchema = new Schema(
   {
     experienceId: { type: String, required: true },
-    company: { type: String, required: true },
+    company: { type: String, default: "" },
     role: { type: String, required: true },
     employmentType: { type: String, default: "" },
     location: { type: String, default: "" },
@@ -51,7 +51,7 @@ const experienceSchema = new Schema(
     endDate: { type: String, default: "Present" },
     description: { type: String, default: "" },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- POST IMAGE URLS --------------------
@@ -64,7 +64,7 @@ const postImageUrlSchema = new Schema(
     image4: { type: String, default: "" },
     image5: { type: String, default: "" },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- CAPTION --------------------
@@ -74,7 +74,7 @@ const captionSchema = new Schema(
     captionId: { type: String, required: true },
     content: { type: String, default: "" },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- POST LIKES --------------------
@@ -84,7 +84,7 @@ const likeSchema = new Schema(
     likeId: { type: String, required: true },
     userId: { type: String, required: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- MENTIONED USERS --------------------
@@ -94,7 +94,7 @@ const mentionedUserSchema = new Schema(
     userId: { type: String, required: true },
     username: { type: String, required: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- POST COMMENTS --------------------
@@ -111,7 +111,7 @@ const commentSchema = new Schema(
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- POST SHARES --------------------
@@ -123,7 +123,7 @@ const shareSchema = new Schema(
     toUserId: { type: String, required: true },
     createdAt: { type: Date, default: Date.now },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- POST MENTIONS --------------------
@@ -133,7 +133,7 @@ const mentionsSchema = new Schema(
     mentionId: { type: String, required: true },
     mentions: { type: [mentionedUserSchema], default: [] },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- POST SAVES --------------------
@@ -143,7 +143,7 @@ const saveSchema = new Schema(
     saveId: { type: String, default: "" },
     userId: { type: String, required: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- POST DISPLAY SETTINGS --------------------
@@ -154,7 +154,7 @@ const postSettingsSchema = new Schema(
     hideComments: { type: Boolean, default: false },
     hideShareCount: { type: Boolean, default: false },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- EMBEDDED POSTS --------------------
@@ -188,7 +188,7 @@ const postSchema = new Schema(
       default: () => ({}),
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- FRIENDS --------------------
@@ -203,7 +203,7 @@ const friendSchema = new Schema(
       required: true,
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // -------------------- FRIEND REQUEST PROFILE SNAPSHOT --------------------
@@ -223,7 +223,7 @@ const requestProfileSchema = new Schema(
       default: [],
     },
   },
-  { _id: false, strict: true }
+  { _id: false, strict: true },
 );
 
 // -------------------- FRIEND REQUESTS --------------------
@@ -244,7 +244,32 @@ const requestSchema = new Schema(
       default: Date.now,
     },
   },
-  { _id: false }
+  { _id: false },
+);
+
+// -------------------- STORY VIEWERS --------------------
+// NEW: one entry per person who has watched a story (user id + email).
+
+const storyViewerSchema = new Schema(
+  {
+    userId: { type: String, required: true },
+    email: { type: String, required: true },
+    viewedAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
+// -------------------- STORIES --------------------
+
+const storySchema = new Schema(
+  {
+    storyId: { type: String, required: true },
+    imageUrl: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now, required: true },
+    expiresAt: { type: Date, required: true },
+    viewers: { type: [storyViewerSchema], default: [] },
+  },
+  { _id: false },
 );
 
 // -------------------- PROFILE INTERFACE --------------------
@@ -253,11 +278,12 @@ export interface IProfile extends Document {
   userid: string;
   username: string;
   bio: string;
+  location: string;
+  website: string;
   profileimage: string;
   coverimage: string;
   isPrivate: boolean;
 
-  // Required because the schema uses timestamps: true.
   createdAt: Date;
   updatedAt: Date;
 
@@ -315,6 +341,18 @@ export interface IProfile extends Document {
     accept: boolean;
     createdAt: Date;
   }>;
+
+  stories: Array<{
+    storyId: string;
+    imageUrl: string;
+    createdAt: Date;
+    expiresAt: Date;
+    viewers: Array<{
+      userId: string;
+      email: string;
+      viewedAt: Date;
+    }>;
+  }>;
 }
 
 // -------------------- PROFILE SCHEMA --------------------
@@ -336,6 +374,16 @@ const profileSchema = new Schema<IProfile>(
       type: String,
       default: "",
       maxlength: 500,
+    },
+    location: {
+      type: String,
+      default: "",
+      maxlength: 100,
+    },
+    website: {
+      type: String,
+      default: "",
+      maxlength: 200,
     },
     profileimage: {
       type: String,
@@ -377,14 +425,21 @@ const profileSchema = new Schema<IProfile>(
       type: [requestSchema],
       default: [],
     },
+    stories: {
+      type: [storySchema],
+      default: [],
+    },
   },
   {
     timestamps: true,
     versionKey: false,
-  }
+  },
 );
 
-// Reuse the existing model and explicitly target the profiles collection.
+// Speeds up the username-availability lookups.
+profileSchema.index({ username: 1 });
+
+// Reuse the existing model and target the profiles collection.
 const Profile =
   (mongoose.models.Profile as mongoose.Model<IProfile>) ||
   mongoose.model<IProfile>("Profile", profileSchema, "profiles");
