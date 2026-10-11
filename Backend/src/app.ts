@@ -6,7 +6,7 @@ import cookieParser from "cookie-parser";
 import authRoutes from "./routes/authRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
-
+import feedRoutes from "./routes/feedRoutes.js";
 const app = express();
 
 const clientUrl =
@@ -49,6 +49,9 @@ app.use("/api/uploads", uploadRoutes);
 // User profile routes
 // Keep all API routes before the 404 handler.
 app.use("/api/profiles", profileRoutes);
+
+// Feed routes
+app.use("/api/feed", feedRoutes);
 
 // Handle unknown routes
 app.use((_request, response) => {

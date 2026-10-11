@@ -1,1 +1,81 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#B76E4D" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="6"/><path d="m9.5 9 1.6 1.7L14.8 7"/><path d="M8.5 14 7 21l5-3 5 3-1.5-7"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Golden star medal with red ribbons</title>
+  <desc id="desc">A glossy golden award medal with a raised bronze star and two red ribbon tails.</desc>
+  <defs>
+    <linearGradient id="rim" x1="80" y1="55" x2="410" y2="410" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF8B8"/>
+      <stop offset=".18" stop-color="#FFD85B"/>
+      <stop offset=".36" stop-color="#C87912"/>
+      <stop offset=".52" stop-color="#FFF09A"/>
+      <stop offset=".7" stop-color="#E59A20"/>
+      <stop offset=".86" stop-color="#FFF3A5"/>
+      <stop offset="1" stop-color="#B9650B"/>
+    </linearGradient>
+    <linearGradient id="face" x1="150" y1="100" x2="365" y2="350" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFEBA0"/>
+      <stop offset=".3" stop-color="#FFF5B1"/>
+      <stop offset=".62" stop-color="#F6D45B"/>
+      <stop offset="1" stop-color="#D88918"/>
+    </linearGradient>
+    <linearGradient id="star" x1="205" y1="145" x2="320" y2="325" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E77D1C"/>
+      <stop offset=".42" stop-color="#C75A0B"/>
+      <stop offset="1" stop-color="#8F3206"/>
+    </linearGradient>
+    <linearGradient id="ribbonL" x1="168" y1="315" x2="220" y2="500" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FF5555"/>
+      <stop offset=".35" stop-color="#F20B1B"/>
+      <stop offset=".72" stop-color="#E20A1A"/>
+      <stop offset="1" stop-color="#FF6965"/>
+    </linearGradient>
+    <linearGradient id="ribbonR" x1="300" y1="315" x2="360" y2="500" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FF6965"/>
+      <stop offset=".35" stop-color="#F20B1B"/>
+      <stop offset=".72" stop-color="#DF0717"/>
+      <stop offset="1" stop-color="#FF5B5B"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="170" y1="90" x2="345" y2="290" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="60" y="10" width="400" height="500" filterUnits="userSpaceOnUse">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="7"/>
+      <feOffset dy="7"/>
+      <feComponentTransfer><feFuncA type="linear" slope=".25"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="rimClip"><circle cx="256" cy="194" r="145"/></clipPath>
+  </defs>
+  <g filter="url(#shadow)">
+    <path d="M164 282 113 452 190 426 219 494 266 328Z" fill="url(#ribbonL)" stroke="#D00A19" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M348 282 399 452 322 426 293 494 246 328Z" fill="url(#ribbonR)" stroke="#D00A19" stroke-width="2" stroke-linejoin="round"/>
+    <path d="m164 312-34 118 52-17 22 45 31-110-71-36Z" fill="#FFAAAA" opacity=".2"/>
+    <path d="m348 312 34 118-52-17-22 45-31-110 71-36Z" fill="#FFAAAA" opacity=".18"/>
+    <path d="M177 300 156 412l14-4 28-96Z" fill="#FFD85B" opacity=".95"/>
+    <path d="M335 300 356 412l-14-4-28-96Z" fill="#FFD85B" opacity=".95"/>
+    <circle cx="256" cy="194" r="145" fill="url(#rim)" stroke="#B96D0B" stroke-width="2"/>
+    <g clip-path="url(#rimClip)" opacity=".9">
+      <path d="M256 49H355L323 99H256Z" fill="#FFF2A1"/>
+      <path d="M355 49 424 117 369 143 323 99Z" fill="#D88A1A"/>
+      <path d="M424 117 449 224H390L369 143Z" fill="#FFF0A0"/>
+      <path d="M449 224 409 315 365 270 390 224Z" fill="#D88916"/>
+      <path d="M409 315 326 350 315 292 365 270Z" fill="#FFF0A0"/>
+      <path d="M326 350 222 339 245 285 315 292Z" fill="#D88A1A"/>
+      <path d="M222 339 132 292 180 252 245 285Z" fill="#FFF1A0"/>
+      <path d="M132 292 63 215 122 194 180 252Z" fill="#D88916"/>
+      <path d="M63 215 94 117 145 144 122 194Z" fill="#FFF0A0"/>
+      <path d="M94 117 164 49 190 100 145 144Z" fill="#D88916"/>
+      <path d="M164 49H256V100L190 100Z" fill="#FFF1A0"/>
+      <path d="M256 49H355L323 99H256Z" fill="#FFF1A0" opacity=".7"/>
+    </g>
+    <circle cx="256" cy="194" r="111" fill="url(#face)" stroke="#FBE28A" stroke-width="3"/>
+    <circle cx="256" cy="194" r="103" fill="none" stroke="#D99620" stroke-opacity=".42" stroke-width="2"/>
+    <path d="M256 118c-28 0-54 11-72 30" fill="none" stroke="url(#shine)" stroke-width="9" stroke-linecap="round"/>
+    <path d="m256 133 22 45 50 7-36 35 9 50-45-24-45 24 9-50-36-35 50-7 22-45Z" fill="url(#star)" stroke="#B9570A" stroke-width="3" stroke-linejoin="round"/>
+    <path d="m256 140 18 39 42 6-30 29 7 42-37-20-37 20 7-42-30-29 42-6 18-39Z" fill="#F59A2A" opacity=".22"/>
+    <path d="M224 184 256 140l-1 43-31 1Z" fill="#FFB24B" opacity=".45"/>
+    <path d="M256 140 274 179l42 6-30 29-30-31Z" fill="#F8A02D" opacity=".35"/>
+    <path d="M143 151 151 169l18 8-18 8-8 18-8-18-18-8 18-8Z" fill="#FFF9C5" opacity=".85"/>
+    <path d="m365 105 5 12 12 5-12 5-5 12-5-12-12-5 12-5Z" fill="#FFF7BC"/>
+  </g>
+</svg>
