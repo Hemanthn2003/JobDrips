@@ -19,6 +19,7 @@ import {
   declineFriendRequest,
 } from "../controllers/profileController.js";
 
+import { removeFriend } from "../controllers/friendController.js";
 import { authenticate } from "../utils/authMiddleware.js";
 
 const router = Router();
@@ -43,6 +44,9 @@ router.delete("/me/experience/:id", authenticate, deleteExperience);
 router.post("/requests/:requesterId/accept", authenticate, acceptFriendRequest);
 router.post("/requests/:requesterId/decline", authenticate, declineFriendRequest);
 router.post("/:userid/friend-request", authenticate, sendFriendRequest);
+
+// Remove an accepted friend (removes it on both profiles)
+router.delete("/friends/:userid", authenticate, removeFriend);
 
 // Stories
 router.post("/me/stories", authenticate, createStory);

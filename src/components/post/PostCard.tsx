@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Archive,
   Bookmark,
@@ -69,6 +70,7 @@ function ActionButton({
 }
 
 export default function PostCard({ initialPost, viewer, onRemoved }: Props) {
+  const navigate = useNavigate();
   const [post, setPost] = useState(initialPost);
   const [imageIndex, setImageIndex] = useState(0);
   const [showComments, setShowComments] = useState(false);
@@ -99,6 +101,15 @@ export default function PostCard({ initialPost, viewer, onRemoved }: Props) {
   const commentsEnabled = !settings.hideComments;
 
   const update = (change: (current: PostData) => PostData) => setPost(change);
+
+  // Tapping the photo / name at the top opens that person's profile.
+  const openAuthorProfile = () => {
+    if (isOwner || post.author.userid === viewer.userid) {
+      navigate("/profile");
+      return;
+    }
+    navigate(`/profile/${encodeURIComponent(post.author.userid)}`);
+  };
 
   // Big medal that shows for one second on the photo.
   const triggerBurst = () => {
@@ -209,18 +220,37 @@ export default function PostCard({ initialPost, viewer, onRemoved }: Props) {
 
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-4 sm:px-5">
-        <PersonAvatar
-          src={post.author.profileimage}
-          name={post.author.name || post.author.username}
-          className="h-11 w-11"
-        />
+        <button
+          type="button"
+          onClick={openAuthorProfile}
+          aria-label={`Open ${post.author.username}'s profile`}
+          className="shrink-0 rounded-full transition active:opacity-70"
+        >
+          <PersonAvatar
+            src={post.author.profileimage}
+            name={post.author.name || post.author.username}
+            className="h-11 w-11"
+          />
+        </button>
 
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-bold text-[#332720]">
-            {post.author.name || post.author.username}
+            <button
+              type="button"
+              onClick={openAuthorProfile}
+              className="max-w-full truncate text-left hover:underline"
+            >
+              {post.author.name || post.author.username}
+            </button>
           </h2>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-[#9a897e]">
-            <span>@{post.author.username}</span>
+            <button
+              type="button"
+              onClick={openAuthorProfile}
+              className="hover:underline"
+            >
+              @{post.author.username}
+            </button>
             {post.createdAt && (
               <>
                 <span>·</span>
@@ -391,7 +421,7 @@ export default function PostCard({ initialPost, viewer, onRemoved }: Props) {
                 label="Comments"
                 active={showComments}
                 count={post.commentCount}
-                onClick={() => setShowComments((value) => !value)}
+                onClick={() => setShowComments(true)}
               >
                 <MessageCircle size={22} strokeWidth={1.8} className="text-[#6f574a]" />
               </ActionButton>
@@ -478,7 +508,12 @@ export default function PostCard({ initialPost, viewer, onRemoved }: Props) {
         )}
 
         {commentsEnabled && showComments && (
-          <PostComments post={post} viewer={viewer} onPostChange={update} />
+          <PostComments
+            post={post}
+            viewer={viewer}
+            onPostChange={update}
+            onClose={() => setShowComments(false)}
+          />
         )}
 
         {error && (

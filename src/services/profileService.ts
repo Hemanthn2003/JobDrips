@@ -408,6 +408,14 @@ export const profileService = {
     );
   },
 
+  /** Removes an accepted friend from BOTH people's friends lists. */
+  removeFriend(userid: string): Promise<{ success: boolean }> {
+    return profileRequest<{ success: boolean }>(
+      `/friends/${encodeURIComponent(userid)}`,
+      { method: "DELETE" },
+    );
+  },
+
   /** Delete a story belonging to the signed-in profile. */
   deleteStory(storyId: string): Promise<DeleteStoryResponse> {
     return profileRequest<DeleteStoryResponse>(

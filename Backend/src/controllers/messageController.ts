@@ -121,3 +121,72 @@ export const sendMessage = async (
     });
   }
 };
+
+// --------------------------------------------------
+// CHAT HISTORY WITH ONE PERSON
+// GET /api/messages/conversation/:userid
+// Returns every message between the signed-in person and :userid
+// (both directions), oldest first, and marks incoming ones as read.
+// --------------------------------------------------
+
+export const getConversation = async (
+  request: Request,
+  response: Response,
+): Promise<void> => {
+  try {
+    const viewerId = String((request as AuthenticatedRequest).userId || "");
+
+    if (!viewerId) {
+      response.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+      return;
+    }
+
+    const otherId = String(request.params.userid || "");
+
+    if (!otherId || otherId === viewerId) {
+      response.status(400).json({
+        success: false,
+        message: "Choose someone else to view messages with.",
+      });
+      return;
+    }
+
+    const conversationId = conversationIdFor(viewerId, otherId);
+
+    // Newest 500 messages, then flipped so the oldest is first.
+    const latest = await Message.find({ conversationId })
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean();
+
+    const messages = latest.reverse().map((item) => ({
+      messageId: item.messageId,
+      senderUserId: item.senderUserId,
+      recipientUserId: item.recipientUserId,
+      text: item.text ?? "",
+      kind: item.kind ?? "text",
+      sharedPostId: item.sharedPostId ?? null,
+      sharedPostOwnerId: item.sharedPostOwnerId ?? null,
+      createdAt: item.createdAt,
+    }));
+
+    await Message.updateMany(
+      { conversationId, recipientUserId: viewerId, readAt: null },
+      { $set: { readAt: new Date() } },
+    );
+
+    response.status(200).json({
+      success: true,
+      data: { messages },
+    });
+  } catch (error) {
+    console.error("Get conversation failed:", error);
+    response.status(500).json({
+      success: false,
+      message: "Unable to load your messages.",
+    });
+  }
+};

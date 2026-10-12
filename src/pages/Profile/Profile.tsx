@@ -893,6 +893,8 @@ const Profile = () => {
     profileimage?: string;
   } | null>(null);
   const [friendBusy, setFriendBusy] = useState("");
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   // Story viewer
   const [ringLoading, setRingLoading] = useState(false);
@@ -928,8 +930,8 @@ const Profile = () => {
 
   // ---------------- Loading ----------------
 
-  const loadProfile = useCallback(async () => {
-    setLoading(true);
+  const loadProfile = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError("");
 
     try {
@@ -979,6 +981,11 @@ const Profile = () => {
   useEffect(() => {
     void loadProfile();
   }, [loadProfile]);
+
+  // Opening a different member's profile starts at the top of the page.
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+  }, [userid]);
 
   // Re-render every minute so expired stories (and their ring) disappear on time.
   useEffect(() => {
@@ -1211,6 +1218,8 @@ const Profile = () => {
     if (!targetId) return;
     setFriendsOpen(false);
     setRequestsOpen(false);
+    setRemoveOpen(false);
+    setActiveTab("posts");
     navigate(`/profile/${targetId}`);
   };
 
@@ -1345,6 +1354,27 @@ const Profile = () => {
       setError(errMsg(err, "Unable to decline the friend request."));
     } finally {
       setFriendBusy("");
+    }
+  };
+
+  // Removes the friendship on both profiles, then refreshes this page so it
+  // shows the "Add friend" state (and the private-account lock if it applies).
+  const confirmRemoveFriend = async () => {
+    if (!profile || removing) return;
+    setRemoving(true);
+    setError("");
+
+    try {
+      await profileService.removeFriend(profile.userid);
+      setRemoveOpen(false);
+      setFriendsOpen(false);
+      await loadProfile(true);
+      setNotice("Friend removed.");
+    } catch (err: unknown) {
+      setRemoveOpen(false);
+      setError(errMsg(err, "Unable to remove this friend."));
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -1739,7 +1769,11 @@ const Profile = () => {
             </div>
 
             {/* Friends, requests, posts */}
-            <div className="mt-5 grid w-full grid-cols-3">
+            <div
+              className={`mt-5 grid w-full ${
+                ownProfile ? "grid-cols-3" : "grid-cols-2"
+              }`}
+            >
               <button
                 type="button"
                 onClick={() => setFriendsOpen(true)}
@@ -1804,10 +1838,13 @@ const Profile = () => {
                   Posts
                 </span>
               </div>
+            </div>
 
-              {!ownProfile && (
-                <div className="flex min-w-0 items-center justify-center px-1 py-2">
-                  {relationship === "friends" ? (
+            {/* Actions on another member's profile */}
+            {!ownProfile && (
+              <div className="mt-3 flex flex-wrap items-center justify-center gap-3">
+                {relationship === "friends" ? (
+                  <>
                     <button
                       type="button"
                       onClick={() =>
@@ -1817,34 +1854,43 @@ const Profile = () => {
                           profileimage: avatar,
                         })
                       }
-                      className={actionPillClass}
+                      className={`${actionPillClass} min-w-[130px] px-6 py-2.5 text-sm`}
                     >
                       Message
                     </button>
-                  ) : relationship === "requested" ? (
-                    <span className={mutedPillClass}>Requested</span>
-                  ) : relationship === "received" ? (
                     <button
                       type="button"
-                      disabled={friendBusy === profile.userid}
-                      onClick={() => void acceptRequest(profile.userid)}
-                      className={actionPillClass}
+                      onClick={() => setRemoveOpen(true)}
+                      className="min-w-[130px] rounded-full border border-[#E7C3B8] bg-[#FFF5F1] px-6 py-2.5 text-sm font-bold text-[#B4432F] transition hover:bg-[#FBE8E1]"
                     >
-                      Accept
+                      Remove friend
                     </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={friendBusy === profile.userid}
-                      onClick={() => void sendRequest(profile.userid)}
-                      className={actionPillClass}
-                    >
-                      Add friend
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
+                  </>
+                ) : relationship === "requested" ? (
+                  <span className={`${mutedPillClass} px-6 py-2.5 text-sm`}>
+                    Requested
+                  </span>
+                ) : relationship === "received" ? (
+                  <button
+                    type="button"
+                    disabled={friendBusy === profile.userid}
+                    onClick={() => void acceptRequest(profile.userid)}
+                    className={`${actionPillClass} min-w-[130px] px-6 py-2.5 text-sm`}
+                  >
+                    Accept
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={friendBusy === profile.userid}
+                    onClick={() => void sendRequest(profile.userid)}
+                    className={`${actionPillClass} min-w-[130px] px-6 py-2.5 text-sm`}
+                  >
+                    Add friend
+                  </button>
+                )}
+              </div>
+            )}
 
             {!complete && ownProfile && (
               <div className="mt-4 rounded-2xl border border-[#EBD7C8] bg-[#FFFBF8] p-4">
@@ -2303,6 +2349,60 @@ const Profile = () => {
             </div>
           )}
         </Sheet>
+      )}
+
+      {/* ---------------- Remove friend confirmation ---------------- */}
+      {removeOpen && !ownProfile && (
+        <div
+          className="fixed inset-0 z-[180] flex items-center justify-center bg-[#2D1D16]/55 p-5 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !removing) {
+              setRemoveOpen(false);
+            }
+          }}
+        >
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-label="Remove friend"
+            className="w-full max-w-sm rounded-[28px] border border-[#EBDCD1] bg-[#FFFCF9] p-6 text-center shadow-2xl"
+          >
+            <Avatar
+              src={avatar}
+              name={displayName}
+              className="mx-auto h-16 w-16 text-xl"
+            />
+            <h2 className="mt-4 text-xl font-black text-[#30231E]">
+              Remove friend?
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-[#80695D]">
+              <span className="font-bold text-[#4A3A32]">
+                @{profile.username}
+              </span>{" "}
+              will be removed from your friends list, and you will be removed
+              from theirs. You can send a new friend request later.
+            </p>
+
+            <div className="mt-6 grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                disabled={removing}
+                onClick={() => setRemoveOpen(false)}
+                className="rounded-full border border-[#E0CFC4] bg-white px-5 py-3 text-sm font-bold text-[#6F5A4E] disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={removing}
+                onClick={() => void confirmRemoveFriend()}
+                className="rounded-full bg-[#B4432F] px-5 py-3 text-sm font-extrabold text-white shadow-sm transition hover:bg-[#9A3826] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {removing ? "Removing..." : "Remove"}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
 
       {/* ---------------- Message a friend ---------------- */}

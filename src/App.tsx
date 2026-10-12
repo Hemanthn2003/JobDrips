@@ -78,6 +78,12 @@ function App() {
           path="/profile"
           element={<Profile />}
         />
+
+        {/* Another member's profile (friends list, feed header, etc.) */}
+        <Route
+          path="/profile/:userid"
+          element={<Profile />}
+        />
       </Route>
 
       {/* Unknown URL */}

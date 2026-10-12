@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Heart, Pencil, Reply, Send, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Heart, Pencil, Reply, Send, Trash2, X } from "lucide-react";
 import {
   addComment,
   deleteComment,
@@ -18,7 +18,12 @@ interface Props {
   post: PostData;
   viewer: PostPerson;
   onPostChange: (update: (post: PostData) => PostData) => void;
+  /** Closes the bottom sheet. */
+  onClose: () => void;
 }
+
+const byOldestFirst = (a: PostComment, b: PostComment) =>
+  new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
 
 const errText = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
@@ -26,7 +31,7 @@ const errText = (error: unknown, fallback: string) =>
 const iconButton =
   "flex h-7 items-center gap-1 rounded-full px-1.5 text-[11px] font-semibold text-[#9a897e] transition hover:bg-[#f5ece6] hover:text-[#654536] disabled:opacity-50";
 
-export default function PostComments({ post, viewer, onPostChange }: Props) {
+export default function PostComments({ post, viewer, onPostChange, onClose }: Props) {
   const [draft, setDraft] = useState("");
   const [replyTo, setReplyTo] = useState<{ commentId: string; username: string } | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
@@ -36,10 +41,60 @@ export default function PostComments({ post, viewer, onPostChange }: Props) {
   const [editText, setEditText] = useState("");
   const [busyId, setBusyId] = useState("");
 
-  const comments = post.comments ?? [];
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const scrollToId = useRef<string>("");
+  const opened = useRef(false);
+
+  // Oldest comments first (top), newest last (bottom).
+  const comments = [...(post.comments ?? [])].sort(byOldestFirst);
   const topLevel = comments.filter((comment) => !comment.parentCommentId);
   const repliesOf = (id: string) =>
     comments.filter((comment) => comment.parentCommentId === id);
+
+  // Always call the latest onClose without re-running the effect below.
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
+
+  // Keep the page behind the sheet still while it is open, and close on Esc.
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  // Opening the sheet jumps to the newest comment; posting a comment or a
+  // reply scrolls to the one just added.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+
+    if (scrollToId.current) {
+      const target = list.querySelector(
+        `[data-comment-id="${scrollToId.current}"]`,
+      );
+      scrollToId.current = "";
+      if (target instanceof HTMLElement) {
+        target.scrollIntoView({ block: "end", behavior: "smooth" });
+        return;
+      }
+    }
+
+    if (!opened.current) {
+      opened.current = true;
+      list.scrollTop = list.scrollHeight;
+    }
+  }, [comments.length]);
 
   // A comment needs words besides its @mentions.
   const hasContent = draft.replace(/@[A-Za-z0-9_.]+/g, "").trim().length > 0;
@@ -81,6 +136,7 @@ export default function PostComments({ post, viewer, onPostChange }: Props) {
         replyTo?.commentId ?? null,
       );
 
+      scrollToId.current = result.comment.commentId;
       onPostChange((current) => ({
         ...current,
         commentCount: result.commentCount,
@@ -166,7 +222,11 @@ export default function PostComments({ post, viewer, onPostChange }: Props) {
     const editing = editingId === comment.commentId;
 
     return (
-      <div key={comment.commentId} className={`flex gap-2.5 ${isReply ? "ml-9 mt-2.5" : "mt-3.5"}`}>
+      <div
+        key={comment.commentId}
+        data-comment-id={comment.commentId}
+        className={`flex gap-2.5 ${isReply ? "ml-9 mt-2.5" : "mt-3.5"}`}
+      >
         <PersonAvatar
           src={comment.profileImage}
           name={comment.username || "User"}
@@ -271,64 +331,111 @@ export default function PostComments({ post, viewer, onPostChange }: Props) {
   };
 
   return (
-    <div className="mt-3 border-t border-[#f0e7e1] pt-1">
-      {topLevel.length === 0 && (
-        <p className="py-4 text-center text-sm text-[#9a897e]">No comments yet. Start the conversation.</p>
-      )}
+    <div
+      className="fixed inset-0 z-[170] flex items-end justify-center bg-[#2D1D16]/55 backdrop-blur-sm sm:items-center sm:p-5"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <style>{`
+        @keyframes jd-sheet-up {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
+        }
+      `}</style>
 
-      {topLevel.map((comment) => (
-        <div key={comment.commentId}>
-          {renderComment(comment, false)}
-          {repliesOf(comment.commentId).map((reply) => renderComment(reply, true))}
-        </div>
-      ))}
-
-      {error && (
-        <p role="alert" className="mt-3 text-xs text-red-600">
-          {error}
-        </p>
-      )}
-
-      <div className="mt-4">
-        {replyTo && (
-          <p className="mb-1.5 flex items-center justify-between text-xs text-[#8b7a70]">
-            <span>
-              Replying to <b className="text-[#654536]">@{replyTo.username}</b>
-            </span>
-            <button type="button" onClick={cancelReply} className="font-semibold text-[#9a6e58]">
-              Cancel
-            </button>
-          </p>
-        )}
-
-        <div className="flex items-center gap-2">
-          <PersonAvatar src={viewer.profileimage} name={viewer.username} className="h-8 w-8" />
-
-          <div className="flex min-w-0 flex-1 items-center rounded-full border border-[#eee4dd] bg-[#faf8f6] pl-3 pr-1 focus-within:border-[#b79d8a]">
-            {!replyTo && (
-              <span className="mr-1.5 shrink-0 text-sm font-bold text-[#654536]">@{viewer.username}</span>
-            )}
-            <MentionField
-              value={draft}
-              onChange={setDraft}
-              maxLength={1000}
-              placeholder={replyTo ? "Write a reply..." : "Write a comment..."}
-              onSubmit={() => void submit()}
-              focusSignal={focusSignal}
-              className="h-10 w-full min-w-0 bg-transparent text-sm text-[#332720] outline-none placeholder:text-[#b2a399]"
-            />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label="Comments"
+        style={{ animation: "jd-sheet-up 0.28s cubic-bezier(0.22, 1, 0.36, 1)" }}
+        className="flex h-[80dvh] w-full max-w-lg flex-col rounded-t-3xl border border-[#eee4dd] bg-white shadow-2xl sm:h-[640px] sm:max-h-[88dvh] sm:rounded-3xl"
+      >
+        {/* Header */}
+        <div className="shrink-0 border-b border-[#f0e7e1] px-4 pb-3 pt-2.5">
+          <span className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#e3d6cc] sm:hidden" />
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-base font-bold text-[#332720]">
+              Comments
+              <span className="ml-1.5 text-sm font-semibold text-[#9a897e]">
+                {post.commentCount}
+              </span>
+            </h2>
             <button
               type="button"
-              disabled={!hasContent || sending}
-              onClick={() => void submit()}
-              aria-label="Post comment"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#654536] transition hover:bg-[#f0e5de] disabled:opacity-40"
+              onClick={onClose}
+              aria-label="Close comments"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f5ede8] text-[#654536]"
             >
-              <Send size={17} />
+              <X size={18} />
             </button>
           </div>
         </div>
-      </div>
+
+        {/* Comments: oldest at the top, newest at the bottom */}
+        <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4">
+          {topLevel.length === 0 && (
+            <p className="py-10 text-center text-sm text-[#9a897e]">
+              No comments yet. Start the conversation.
+            </p>
+          )}
+
+          {topLevel.map((comment) => (
+            <div key={comment.commentId}>
+              {renderComment(comment, false)}
+              {repliesOf(comment.commentId).map((reply) => renderComment(reply, true))}
+            </div>
+          ))}
+        </div>
+
+        {/* Fixed mention + comment box */}
+        <div className="shrink-0 border-t border-[#f0e7e1] bg-white px-4 pb-[max(env(safe-area-inset-bottom),12px)] pt-3">
+          {error && (
+            <p role="alert" className="mb-2 text-xs text-red-600">
+              {error}
+            </p>
+          )}
+
+          {replyTo && (
+            <p className="mb-1.5 flex items-center justify-between text-xs text-[#8b7a70]">
+              <span>
+                Replying to <b className="text-[#654536]">@{replyTo.username}</b>
+              </span>
+              <button type="button" onClick={cancelReply} className="font-semibold text-[#9a6e58]">
+                Cancel
+              </button>
+            </p>
+          )}
+
+          <div className="flex items-center gap-2">
+            <PersonAvatar src={viewer.profileimage} name={viewer.username} className="h-8 w-8" />
+
+            <div className="flex min-w-0 flex-1 items-center rounded-full border border-[#eee4dd] bg-[#faf8f6] pl-3 pr-1 focus-within:border-[#b79d8a]">
+              {!replyTo && (
+                <span className="mr-1.5 shrink-0 text-sm font-bold text-[#654536]">@{viewer.username}</span>
+              )}
+              <MentionField
+                value={draft}
+                onChange={setDraft}
+                maxLength={1000}
+                placeholder={replyTo ? "Write a reply..." : "Write a comment..."}
+                onSubmit={() => void submit()}
+                focusSignal={focusSignal}
+                className="h-10 w-full min-w-0 bg-transparent text-sm text-[#332720] outline-none placeholder:text-[#b2a399]"
+              />
+              <button
+                type="button"
+                disabled={!hasContent || sending}
+                onClick={() => void submit()}
+                aria-label="Post comment"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#654536] transition hover:bg-[#f0e5de] disabled:opacity-40"
+              >
+                <Send size={17} />
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

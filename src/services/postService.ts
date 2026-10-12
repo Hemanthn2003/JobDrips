@@ -321,3 +321,23 @@ export async function sendMessage(input: {
 }) {
   await request<{ success: boolean }>("/api/messages/send", json(input));
 }
+
+export interface ChatMessage {
+  messageId: string;
+  senderUserId: string;
+  recipientUserId: string;
+  text: string;
+  kind: "text" | "post_share" | "mention";
+  sharedPostId: string | null;
+  sharedPostOwnerId: string | null;
+  createdAt: string;
+}
+
+/** Every message between me and one friend (both sides), oldest first. */
+export async function getConversation(userid: string): Promise<ChatMessage[]> {
+  const result = await request<ApiResult<{ messages: ChatMessage[] }>>(
+    `/api/messages/conversation/${encodeURIComponent(userid)}`,
+  );
+
+  return result.data.messages ?? [];
+}
