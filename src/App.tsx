@@ -14,6 +14,7 @@ import Messages from "./pages/Messages/Messages";
 import AddPost from "./pages/AddPost/AddPost";
 import Notifications from "./pages/Notifications/Notifications";
 import Profile from "./pages/Profile/Profile";
+  import ViewPost from "./pages/ViewPost/ViewPost";
 
 function App() {
   const [showSplash, setShowSplash] = useState(true);
@@ -67,7 +68,7 @@ function App() {
           path="/add-post"
           element={<AddPost />}
         />
-
+           <Route path="/profile/:userid/posts/:postId" element={<ViewPost />} />
         <Route
           path="/notifications"
           element={<Notifications />}

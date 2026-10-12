@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { profileService } from "../../services/profileService";
+import { MessageSheet } from "../../components/post/PostSheets";
 import type {
   Education,
   EducationInput,
@@ -10,6 +11,7 @@ import type {
   Friend,
   Profile as ProfileData,
   ProfileUpdateData,
+  Relationship,
   Story,
 } from "../../services/profileService";
 
@@ -56,6 +58,11 @@ const smallButtonClass =
   "rounded-full border border-[#D9B7A5] px-3 py-2 text-xs font-bold text-[#985438] disabled:opacity-60";
 const primaryButtonClass =
   "rounded-full bg-gradient-to-r from-[#CB8969] to-[#994D35] px-5 py-2.5 text-sm font-extrabold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60";
+
+const actionPillClass =
+  "rounded-full bg-gradient-to-r from-[#CB8969] to-[#994D35] px-4 py-2 text-xs font-extrabold text-white shadow-sm disabled:opacity-60";
+const mutedPillClass =
+  "rounded-full border border-[#E0CFC4] bg-[#FFF8F3] px-4 py-2 text-xs font-bold text-[#8D776B]";
 
 const errMsg = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
@@ -739,106 +746,19 @@ function ExperienceEditor({
 }
 
 // --------------------------------------------------
-// Posts
+// Posts (image grid)
 // --------------------------------------------------
 
-function PostCard({
-  post,
-  authorName,
-  authorAvatar,
-}: {
-  post: unknown;
-  authorName: string;
-  authorAvatar?: string;
-}) {
-  if (!post || typeof post !== "object") return null;
-
-  const record = post as Record<string, unknown>;
-  const imageMap = record.imageUrl;
-
-  const images: string[] = Array.isArray(record.imageUrls)
-    ? record.imageUrls.filter(isNonEmptyString)
-    : imageMap && typeof imageMap === "object"
-      ? Object.values(imageMap as Record<string, unknown>).filter(
-          isNonEmptyString,
-        )
-      : [];
-
-  const captions = record.captions as Record<string, unknown> | undefined;
-  const caption =
-    typeof record.caption === "string"
-      ? record.caption
-      : typeof captions?.content === "string"
-        ? captions.content
-        : "";
-
-  const likes = Array.isArray(record.likes) ? record.likes.length : 0;
-  const comments = Array.isArray(record.comments) ? record.comments.length : 0;
-  const name = typeof record.username === "string" ? record.username : authorName;
-
-  return (
-    <article className="px-4 py-4 sm:px-5">
-      <div className="flex items-center gap-3">
-        <Avatar src={authorAvatar} name={name} square className="h-11 w-11" />
-        <div className="min-w-0">
-          <p className="truncate text-sm font-extrabold text-[#30231E]">
-            {name}
-            <span className="ml-2 text-xs font-medium text-[#9B8174]">
-              {timeAgo(record.createdAt)}
-            </span>
-          </p>
-        </div>
-      </div>
-
-      {caption && (
-        <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-[#4A3A32]">
-          {caption}
-        </p>
-      )}
-
-      {images[0] && (
-        <div className="relative mt-3 overflow-hidden rounded-2xl bg-[#F0DFD3]">
-          <img
-            src={images[0]}
-            alt={caption || "Post"}
-            loading="lazy"
-            className="aspect-[16/10] w-full object-cover"
-          />
-          {images.length > 1 && (
-            <span className="absolute right-2 top-2 rounded-md bg-black/60 px-2 py-1 text-[11px] font-bold text-white">
-              +{images.length - 1}
-            </span>
-          )}
-        </div>
-      )}
-
-      <div className="mt-3 flex items-center justify-between text-[#A4543A]">
-        <span className="flex items-center gap-2 text-sm font-bold">
-          <Icon d={ICONS.heart} className="h-6 w-6" />
-          {likes}
-        </span>
-        <Icon d={ICONS.bookmark} className="h-6 w-6" />
-        <span className="flex items-center gap-2 text-sm font-bold">
-          <Icon d={ICONS.comment} className="h-6 w-6" />
-          {comments}
-        </span>
-      </div>
-    </article>
-  );
-}
-
-function PostList({
+function PostGrid({
   items,
-  authorName,
-  authorAvatar,
   emptyTitle,
   emptyText,
+  onOpen,
 }: {
   items: unknown[];
-  authorName: string;
-  authorAvatar?: string;
   emptyTitle: string;
   emptyText: string;
+  onOpen: (item: unknown) => void;
 }) {
   if (items.length === 0) {
     return (
@@ -853,20 +773,63 @@ function PostList({
   }
 
   return (
-    <div className="divide-y divide-[#F0E3D9]">
+    <div className="grid grid-cols-3 gap-0.5 p-0.5 sm:gap-1 sm:p-1">
       {items.map((item, index) => {
+        if (!item || typeof item !== "object") return null;
+
+        const record = item as Record<string, unknown>;
+        const imageMap = record.imageUrl;
+
+        const images: string[] = Array.isArray(record.imageUrls)
+          ? record.imageUrls.filter(isNonEmptyString)
+          : imageMap && typeof imageMap === "object"
+            ? Object.values(imageMap as Record<string, unknown>).filter(
+                isNonEmptyString,
+              )
+            : [];
+
+        const captions = record.captions as Record<string, unknown> | undefined;
+        const caption =
+          typeof record.caption === "string"
+            ? record.caption
+            : typeof captions?.content === "string"
+              ? captions.content
+              : "";
+
         const id =
-          item && typeof item === "object" && "postId" in item
-            ? String((item as { postId: unknown }).postId)
-            : `post-${index}`;
+          typeof record.postId === "string" ? record.postId : `post-${index}`;
 
         return (
-          <PostCard
+          <button
             key={id}
-            post={item}
-            authorName={authorName}
-            authorAvatar={authorAvatar}
-          />
+            type="button"
+            onClick={() => onOpen(item)}
+            aria-label={caption ? `Open post: ${caption.slice(0, 40)}` : "Open post"}
+            className="group relative aspect-square overflow-hidden bg-[#F0DFD3]"
+          >
+            {images[0] ? (
+              <img
+                src={images[0]}
+                alt={caption || "Post"}
+                loading="lazy"
+                className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+              />
+            ) : (
+              <span className="flex h-full items-center justify-center p-3 text-center text-xs leading-5 text-[#80533E]">
+                {caption || "Post"}
+              </span>
+            )}
+            {images.length > 1 && (
+              <span className="absolute right-1.5 top-1.5 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                +{images.length - 1}
+              </span>
+            )}
+            {record.archived === true && (
+              <span className="absolute left-1.5 top-1.5 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                Archived
+              </span>
+            )}
+          </button>
         );
       })}
     </div>
@@ -880,7 +843,9 @@ function PostList({
 const Profile = () => {
   const { userid } = useParams<{ userid: string }>();
   const navigate = useNavigate();
-  const ownProfile = !userid;
+  // True when this page shows the signed-in person's own profile.
+  const [selfView, setSelfView] = useState(false);
+  const ownProfile = !userid || selfView;
 
   const profileInputRef = useRef<HTMLInputElement>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
@@ -922,6 +887,12 @@ const Profile = () => {
   const [profilePhotoViewerOpen, setProfilePhotoViewerOpen] = useState(false);
   const [requestsOpen, setRequestsOpen] = useState(false);
   const [friendsOpen, setFriendsOpen] = useState(false);
+  const [messageTarget, setMessageTarget] = useState<{
+    userid: string;
+    username: string;
+    profileimage?: string;
+  } | null>(null);
+  const [friendBusy, setFriendBusy] = useState("");
 
   // Story viewer
   const [ringLoading, setRingLoading] = useState(false);
@@ -964,11 +935,24 @@ const Profile = () => {
     try {
       if (userid) {
         const response = await profileService.getPublicProfile(userid);
-        setProfile(response.data);
-        setOwnName("");
-        setOwnEmail("");
-        setOwnPhoto("");
+
+        if (response.data.relationship === "self") {
+          // Opened our own profile through a link: show the full own view.
+          const mine = await profileService.getMyProfile();
+          setSelfView(true);
+          setProfile(mine.data.profile);
+          setOwnName(mine.data.user.name || "");
+          setOwnEmail(mine.data.user.email || "");
+          setOwnPhoto(mine.data.user.profilePhoto || "");
+        } else {
+          setSelfView(false);
+          setProfile(response.data);
+          setOwnName("");
+          setOwnEmail("");
+          setOwnPhoto("");
+        }
       } else {
+        setSelfView(false);
         const response = await profileService.getMyProfile();
         setProfile(response.data.profile);
         setOwnName(response.data.user.name || "");
@@ -1221,6 +1205,149 @@ const Profile = () => {
       if (file) void uploadAndSaveImage(file, kind);
     };
 
+  // ---------------- People and posts ----------------
+
+  const openProfile = (targetId: string) => {
+    if (!targetId) return;
+    setFriendsOpen(false);
+    setRequestsOpen(false);
+    navigate(`/profile/${targetId}`);
+  };
+
+  // Opens the full post (same card as the feed) at /profile/:userid/posts/:postId
+  const openPost = (item: unknown) => {
+    if (!item || typeof item !== "object") return;
+    const record = item as Record<string, unknown>;
+    const postId = typeof record.postId === "string" ? record.postId : "";
+    const ownerId =
+      typeof record.userid === "string" && record.userid
+        ? record.userid
+        : (profile?.userid ?? "");
+
+    if (postId && ownerId) navigate(`/profile/${ownerId}/posts/${postId}`);
+  };
+
+  const setFriendRelation = (id: string, relationship: Relationship) =>
+    setProfile((previous) =>
+      previous
+        ? {
+            ...previous,
+            friends: previous.friends.map((friend) =>
+              friend.userid === id ? { ...friend, relationship } : friend,
+            ),
+          }
+        : previous,
+    );
+
+  const sendRequest = async (targetId: string) => {
+    if (friendBusy) return;
+    setFriendBusy(targetId);
+    setError("");
+
+    try {
+      await profileService.sendFriendRequest(targetId);
+
+      if (profile && targetId === profile.userid) {
+        patchProfile({ relationship: "requested" });
+      } else {
+        setFriendRelation(targetId, "requested");
+      }
+
+      setNotice("Friend request sent.");
+    } catch (err: unknown) {
+      setError(errMsg(err, "Unable to send the friend request."));
+    } finally {
+      setFriendBusy("");
+    }
+  };
+
+  const acceptRequest = async (requesterId: string) => {
+    if (friendBusy) return;
+    setFriendBusy(requesterId);
+    setError("");
+
+    try {
+      await profileService.acceptFriendRequest(requesterId);
+
+      setProfile((previous) => {
+        if (!previous) return previous;
+
+        if (ownProfile) {
+          const incoming = (previous.requests ?? []) as IncomingRequest[];
+          const match = incoming.find(
+            (item) => item.profile?.userid === requesterId,
+          );
+          const who = match ? requestIdentity(match, 0) : null;
+
+          return {
+            ...previous,
+            requests: incoming.filter(
+              (item) => item.profile?.userid !== requesterId,
+            ),
+            friends: previous.friends.some(
+              (friend) => friend.userid === requesterId,
+            )
+              ? previous.friends
+              : [
+                  ...previous.friends,
+                  {
+                    userid: requesterId,
+                    username: who?.name ?? "",
+                    friendshipAccepted: true,
+                    profileimage: who?.photo ?? "",
+                    relationship: "friends" as Relationship,
+                  },
+                ],
+          };
+        }
+
+        if (previous.userid === requesterId) {
+          return { ...previous, relationship: "friends" as Relationship };
+        }
+
+        return {
+          ...previous,
+          friends: previous.friends.map((friend) =>
+            friend.userid === requesterId
+              ? { ...friend, relationship: "friends" as Relationship }
+              : friend,
+          ),
+        };
+      });
+
+      setNotice("Friend request accepted.");
+    } catch (err: unknown) {
+      setError(errMsg(err, "Unable to accept the friend request."));
+    } finally {
+      setFriendBusy("");
+    }
+  };
+
+  const declineRequest = async (requesterId: string) => {
+    if (friendBusy) return;
+    setFriendBusy(requesterId);
+    setError("");
+
+    try {
+      await profileService.declineFriendRequest(requesterId);
+
+      setProfile((previous) =>
+        previous
+          ? {
+              ...previous,
+              requests: ((previous.requests ?? []) as IncomingRequest[]).filter(
+                (item) => item.profile?.userid !== requesterId,
+              ),
+            }
+          : previous,
+      );
+    } catch (err: unknown) {
+      setError(errMsg(err, "Unable to decline the friend request."));
+    } finally {
+      setFriendBusy("");
+    }
+  };
+
   // ---------------- Stories ----------------
 
   const closeStoryViewer = useCallback(() => {
@@ -1398,6 +1525,8 @@ const Profile = () => {
   const posts = profile.posts || [];
   const mentions = profile.mentionedPosts || [];
   const saved = profile.savedPosts || [];
+  const relationship: Relationship = profile.relationship ?? "none";
+  const postsCount = profile.postsCount ?? posts.length;
 
   const restricted =
     !ownProfile &&
@@ -1412,7 +1541,7 @@ const Profile = () => {
   );
 
   const tabs: { id: Tab; label: string; count: number }[] = [
-    { id: "posts", label: "Posts", count: posts.length },
+    { id: "posts", label: "Posts", count: postsCount },
     { id: "mentions", label: "Mentions", count: mentions.length },
     ...(ownProfile
       ? [{ id: "saved" as Tab, label: "Saved", count: saved.length }]
@@ -1610,11 +1739,7 @@ const Profile = () => {
             </div>
 
             {/* Friends, requests, posts */}
-            <div
-              className={`mt-5 grid w-full ${
-                ownProfile ? "grid-cols-3" : "grid-cols-2"
-              }`}
-            >
+            <div className="mt-5 grid w-full grid-cols-3">
               <button
                 type="button"
                 onClick={() => setFriendsOpen(true)}
@@ -1672,13 +1797,53 @@ const Profile = () => {
               <div className="flex min-w-0 flex-col items-center gap-1 px-1 py-2">
                 <span className="flex min-h-[28px] items-center justify-center">
                   <span className="text-lg font-black leading-none sm:text-xl">
-                    {posts.length}
+                    {postsCount}
                   </span>
                 </span>
                 <span className="text-xs font-semibold text-[#80695D]">
                   Posts
                 </span>
               </div>
+
+              {!ownProfile && (
+                <div className="flex min-w-0 items-center justify-center px-1 py-2">
+                  {relationship === "friends" ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMessageTarget({
+                          userid: profile.userid,
+                          username: profile.username,
+                          profileimage: avatar,
+                        })
+                      }
+                      className={actionPillClass}
+                    >
+                      Message
+                    </button>
+                  ) : relationship === "requested" ? (
+                    <span className={mutedPillClass}>Requested</span>
+                  ) : relationship === "received" ? (
+                    <button
+                      type="button"
+                      disabled={friendBusy === profile.userid}
+                      onClick={() => void acceptRequest(profile.userid)}
+                      className={actionPillClass}
+                    >
+                      Accept
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={friendBusy === profile.userid}
+                      onClick={() => void sendRequest(profile.userid)}
+                      className={actionPillClass}
+                    >
+                      Add friend
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {!complete && ownProfile && (
@@ -1751,13 +1916,14 @@ const Profile = () => {
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#F8E9E3] text-[#A4543A]">
                 <Icon d={ICONS.lock} className="h-8 w-8" />
               </div>
-              <h2 className="mt-5 text-xl font-black">This profile is private</h2>
+              <h2 className="mt-5 text-xl font-black">This account is private</h2>
               <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[#80695D]">
-                Connect with this member to view their posts and profile details.
+                Become friends with this member to see their posts.
               </p>
             </div>
           ) : (
-            <PostList
+            <PostGrid
+              onOpen={openPost}
               items={
                 activeTab === "posts"
                   ? posts
@@ -1767,11 +1933,11 @@ const Profile = () => {
                       ? saved
                       : []
               }
-              authorName={profile.username || displayName}
-              authorAvatar={avatar}
               emptyTitle={
                 activeTab === "posts"
-                  ? "Your story starts here"
+                  ? ownProfile
+                    ? "Your story starts here"
+                    : "No posts yet"
                   : activeTab === "mentions"
                     ? "No mentions yet"
                     : "Nothing saved yet"
@@ -1997,19 +2163,70 @@ const Profile = () => {
         >
           {friends.length ? (
             <ul className="mt-5 space-y-3">
-              {friends.map((friend) => (
-                <li
-                  key={friend.userid}
-                  className="flex items-center gap-3 rounded-2xl border border-[#EBDCD1] bg-white p-3"
-                >
-                  <Avatar
-                    src={friend.profileimage}
-                    name={friend.username}
-                    className="h-12 w-12"
-                  />
-                  <p className="truncate text-sm font-bold">@{friend.username}</p>
-                </li>
-              ))}
+              {friends.map((friend) => {
+                const relation: Relationship = ownProfile
+                  ? "friends"
+                  : (friend.relationship ?? "none");
+
+                return (
+                  <li
+                    key={friend.userid}
+                    className="flex items-center gap-3 rounded-2xl border border-[#EBDCD1] bg-white p-3"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => openProfile(friend.userid)}
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                    >
+                      <Avatar
+                        src={friend.profileimage}
+                        name={friend.username}
+                        className="h-12 w-12"
+                      />
+                      <span className="truncate text-sm font-bold">
+                        @{friend.username}
+                      </span>
+                    </button>
+
+                    {relation === "friends" ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFriendsOpen(false);
+                          setMessageTarget({
+                            userid: friend.userid,
+                            username: friend.username,
+                            profileimage: friend.profileimage,
+                          });
+                        }}
+                        className={actionPillClass}
+                      >
+                        Message
+                      </button>
+                    ) : relation === "requested" ? (
+                      <span className={mutedPillClass}>Requested</span>
+                    ) : relation === "received" ? (
+                      <button
+                        type="button"
+                        disabled={friendBusy === friend.userid}
+                        onClick={() => void acceptRequest(friend.userid)}
+                        className={actionPillClass}
+                      >
+                        Accept
+                      </button>
+                    ) : relation === "self" ? null : (
+                      <button
+                        type="button"
+                        disabled={friendBusy === friend.userid}
+                        onClick={() => void sendRequest(friend.userid)}
+                        className={actionPillClass}
+                      >
+                        Add friend
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           ) : (
             <div className="py-10 text-center">
@@ -2041,13 +2258,38 @@ const Profile = () => {
                     key={who.key}
                     className="flex items-center gap-3 rounded-2xl border border-[#EBDCD1] bg-white p-3"
                   >
-                    <Avatar src={who.photo} name={who.name} className="h-12 w-12" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-bold">{who.name}</p>
-                      <p className="text-xs text-[#80695D]">
-                        Sent you a friend request
-                      </p>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openProfile(who.key)}
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                    >
+                      <Avatar src={who.photo} name={who.name} className="h-12 w-12" />
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-bold">
+                          {who.name}
+                        </span>
+                        <span className="block text-xs text-[#80695D]">
+                          Sent you a friend request
+                        </span>
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={friendBusy === who.key}
+                      onClick={() => void acceptRequest(who.key)}
+                      className={actionPillClass}
+                    >
+                      Accept
+                    </button>
+                    <button
+                      type="button"
+                      disabled={friendBusy === who.key}
+                      onClick={() => void declineRequest(who.key)}
+                      className="rounded-full border border-[#E0CFC4] px-3 py-2 text-xs font-bold text-[#8D776B] disabled:opacity-60"
+                    >
+                      Decline
+                    </button>
                   </li>
                 );
               })}
@@ -2061,6 +2303,14 @@ const Profile = () => {
             </div>
           )}
         </Sheet>
+      )}
+
+      {/* ---------------- Message a friend ---------------- */}
+      {messageTarget && (
+        <MessageSheet
+          recipient={messageTarget}
+          onClose={() => setMessageTarget(null)}
+        />
       )}
 
       {/* ---------------- Profile photo viewer ---------------- */}

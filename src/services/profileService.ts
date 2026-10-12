@@ -44,12 +44,21 @@ export interface Experience {
   description: string;
 }
 
+export type Relationship =
+  | "self"
+  | "friends"
+  | "requested"
+  | "received"
+  | "none";
+
 export interface Friend {
   userid: string;
   username: string;
   friendshipAccepted: boolean;
   /** Friend's current profile photo (empty when they have none). */
   profileimage?: string;
+  /** The signed-in person's relationship to this friend. */
+  relationship?: Relationship;
 }
 
 export interface StoryViewer {
@@ -82,6 +91,10 @@ export interface Profile {
   profileimage: string;
   coverimage: string;
   isPrivate: boolean;
+  /** The signed-in person's relationship to this profile. */
+  relationship?: Relationship;
+  /** Number of posts (also sent for private profiles). */
+  postsCount?: number;
   education: Education;
   experience: Experience[];
   friends: Friend[];
@@ -369,6 +382,28 @@ export const profileService = {
   viewStory(userid: string, storyId: string): Promise<StoryViewResponse> {
     return profileRequest<StoryViewResponse>(
       `/${encodeURIComponent(userid)}/stories/${encodeURIComponent(storyId)}/view`,
+      { method: "POST" },
+    );
+  },
+
+  /** Send a friend request to another profile. */
+  sendFriendRequest(userid: string): Promise<{ success: boolean }> {
+    return profileRequest<{ success: boolean }>(
+      `/${encodeURIComponent(userid)}/friend-request`,
+      { method: "POST" },
+    );
+  },
+
+  acceptFriendRequest(requesterId: string): Promise<{ success: boolean }> {
+    return profileRequest<{ success: boolean }>(
+      `/requests/${encodeURIComponent(requesterId)}/accept`,
+      { method: "POST" },
+    );
+  },
+
+  declineFriendRequest(requesterId: string): Promise<{ success: boolean }> {
+    return profileRequest<{ success: boolean }>(
+      `/requests/${encodeURIComponent(requesterId)}/decline`,
       { method: "POST" },
     );
   },

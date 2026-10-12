@@ -103,7 +103,8 @@ const commentSchema = new Schema(
   {
     commentId: { type: String, required: true },
     userId: { type: String, required: true },
-    commentText: { type: String, required: true },
+    username: { type: String, default: "" },
+    commentText: { type: String, required: true, maxlength: 1000 },
     parentCommentId: { type: String, default: null },
     mentions: { type: [mentionedUserSchema], default: [] },
     likes: { type: [String], default: [] },
@@ -153,6 +154,7 @@ const postSettingsSchema = new Schema(
     hideLikeCount: { type: Boolean, default: false },
     hideComments: { type: Boolean, default: false },
     hideShareCount: { type: Boolean, default: false },
+    hideSaveCount: { type: Boolean, default: false },
   },
   { _id: false },
 );
@@ -183,6 +185,7 @@ const postSchema = new Schema(
       enum: ["public", "friends", "private"],
       default: "friends",
     },
+    archived: { type: Boolean, default: false },
     settings: {
       type: postSettingsSchema,
       default: () => ({}),

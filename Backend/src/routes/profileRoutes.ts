@@ -14,6 +14,9 @@ import {
   updateMyProfile,
   updateProfileImage,
   viewStory,
+  sendFriendRequest,
+  acceptFriendRequest,
+  declineFriendRequest,
 } from "../controllers/profileController.js";
 
 import { authenticate } from "../utils/authMiddleware.js";
@@ -35,6 +38,11 @@ router.delete("/me/education/:id", authenticate, deleteEducation);
 // Experience
 router.post("/me/experience", authenticate, addExperience);
 router.delete("/me/experience/:id", authenticate, deleteExperience);
+
+// Friend requests
+router.post("/requests/:requesterId/accept", authenticate, acceptFriendRequest);
+router.post("/requests/:requesterId/decline", authenticate, declineFriendRequest);
+router.post("/:userid/friend-request", authenticate, sendFriendRequest);
 
 // Stories
 router.post("/me/stories", authenticate, createStory);

@@ -1,41 +1,24 @@
 import type { Response } from "express";
 import type { AuthenticatedRequest } from "../utils/authMiddleware.js";
 import Profile from "../models/Profile.js";
+import Report from "../models/Report.js";
 import { User } from "../models/User.js";
-
-type FeedPostDocument = {
-  postId?: string;
-  userid?: string;
-  visibility?: "public" | "friends" | "private";
-  createdAt?: Date | string;
-  [key: string]: unknown;
-};
-
-type FeedFriend = {
-  userid: string;
-  friendshipAccepted: boolean;
-};
+import {
+  acceptedFriendIds,
+  loadPeople,
+  loadPerson,
+  serializePost,
+  type FriendEntry,
+  type RawPost,
+} from "../utils/postHelpers.js";
 
 type FeedProfileDocument = {
   userid: string;
   username?: string;
   profileimage?: string;
-  friends?: FeedFriend[];
-  posts?: FeedPostDocument[];
+  friends?: FriendEntry[];
+  posts?: RawPost[];
   isPrivate?: boolean;
-};
-
-type FeedAuthor = {
-  userid: string;
-  username?: string;
-  name: string;
-  profileimage: string;
-};
-
-type FeedPost = FeedPostDocument & {
-  postId: string;
-  userid: string;
-  author: FeedAuthor;
 };
 
 export const getFeed = async (
@@ -55,132 +38,107 @@ export const getFeed = async (
     // Find the logged-in user's profile.
     const currentProfile = (await Profile.findOne({
       userid: currentUserId,
-    }).lean()) as FeedProfileDocument | null;
+    })
+      .select("userid username profileimage friends")
+      .lean()) as FeedProfileDocument | null;
+
+    // The viewer is returned so the UI can show their name in the comment box.
+    const viewer = await loadPerson(currentUserId, currentProfile);
 
     if (!currentProfile) {
       return response.json({
         success: true,
-        data: {
-          posts: [],
-          total: 0,
-        },
+        data: { posts: [], total: 0, viewer },
       });
     }
 
     // Collect accepted friends only.
-    const acceptedFriendIds = [
-      ...new Set(
-        (currentProfile.friends || [])
-          .filter(
-            (friend) => friend.friendshipAccepted === true
-          )
-          .map((friend) => String(friend.userid))
-          .filter(
-            (friendId) =>
-              friendId.length > 0 &&
-              friendId !== currentUserId
-          )
-      ),
-    ];
+    const friendIds = acceptedFriendIds(currentProfile).filter(
+      (friendId) => friendId.length > 0 && friendId !== currentUserId
+    );
+    const acceptedFriendIdList = [...new Set(friendIds)];
 
     // Return an empty feed if the user has no accepted friends.
-    if (acceptedFriendIds.length === 0) {
+    if (acceptedFriendIdList.length === 0) {
       return response.json({
         success: true,
-        data: {
-          posts: [],
-          total: 0,
-        },
+        data: { posts: [], total: 0, viewer },
       });
     }
 
     // Fetch profiles belonging only to accepted friends.
     const friendProfiles = (await Profile.find({
-      userid: { $in: acceptedFriendIds },
+      userid: { $in: acceptedFriendIdList },
       "posts.0": { $exists: true },
-    }).lean()) as FeedProfileDocument[];
+    }).lean()) as unknown as FeedProfileDocument[];
 
-    const visiblePosts: FeedPost[] = [];
+    // Posts this person reported are hidden from their feed.
+    const reported = await Report.find({ reportedByUserId: currentUserId })
+      .select("postId")
+      .lean();
+    const reportedIds = new Set(reported.map((item) => String(item.postId)));
+
+    const collected: Array<{ post: RawPost; authorId: string }> = [];
 
     for (const profile of friendProfiles) {
       const authorId = String(profile.userid);
-
-      // Do not show posts from a private profile unless the
-      // logged-in user is an accepted friend.
-      // The query already limits authors to accepted friends.
 
       for (const post of profile.posts || []) {
         const visibility = post.visibility || "friends";
 
         // Friends can see public and friends-only posts.
-        // Private posts are excluded from the friends' feed.
-        if (
-          visibility !== "public" &&
-          visibility !== "friends"
-        ) {
-          continue;
-        }
+        // Private and archived posts are excluded from the friends' feed.
+        if (visibility !== "public" && visibility !== "friends") continue;
+        if (post.archived) continue;
+        if (reportedIds.has(String(post.postId))) continue;
 
-        visiblePosts.push({
-          ...post,
-          postId: String(post.postId || ""),
-          userid: authorId,
-          author: {
-            userid: authorId,
-            username: profile.username,
-            name: "",
-            profileimage: profile.profileimage || "",
-          },
+        collected.push({
+          post: { ...post, userid: authorId },
+          authorId,
         });
       }
     }
 
-    // Retrieve account names and photos for post authors.
-    const authorIds = [
-      ...new Set(
-        visiblePosts.map((post) => post.userid)
-      ),
-    ];
+    // Account names and photos for post authors.
+    const authorIds = [...new Set(collected.map((item) => item.authorId))];
 
-    const users = await User.find({
-      _id: { $in: authorIds },
-    })
+    const users = await User.find({ _id: { $in: authorIds } })
       .select("_id name profilePhoto")
       .lean();
 
-    const usersById = new Map(
-      users.map((user) => [
-        String(user._id),
-        user,
-      ])
+    const usersById = new Map(users.map((user) => [String(user._id), user]));
+    const profilesById = new Map(
+      friendProfiles.map((profile) => [String(profile.userid), profile])
     );
 
-    // Attach account names and profile photos.
-    const feedPosts = visiblePosts.map((post) => {
-      const user = usersById.get(post.userid);
+    // People who commented (name + photo shown beside each comment).
+    const people = await loadPeople(
+      collected.flatMap((item) =>
+        (item.post.comments || []).map((comment) => comment.userId)
+      )
+    );
 
-      return {
-        ...post,
+    const feedPosts = collected.map(({ post, authorId }) => {
+      const profile = profilesById.get(authorId);
+      const user = usersById.get(authorId);
+
+      return serializePost(post, {
+        viewerId: currentUserId,
+        people,
+        includeComments: true,
         author: {
-          ...post.author,
-          name: user?.name || post.author.username || "",
-          profileimage:
-            post.author.profileimage ||
-            user?.profilePhoto ||
-            "",
+          userid: authorId,
+          username: profile?.username ?? "",
+          name: user?.name || profile?.username || "",
+          profileimage: profile?.profileimage || user?.profilePhoto || "",
         },
-      };
+      });
     });
 
     // Sort posts from newest to oldest.
     feedPosts.sort((a, b) => {
-      const dateA = new Date(
-        a.createdAt || 0
-      ).getTime();
-
-      const dateB = new Date(
-        b.createdAt || 0
-      ).getTime();
+      const dateA = new Date(a.createdAt || 0).getTime();
+      const dateB = new Date(b.createdAt || 0).getTime();
 
       return dateB - dateA;
     });
@@ -190,6 +148,7 @@ export const getFeed = async (
       data: {
         posts: feedPosts,
         total: feedPosts.length,
+        viewer,
       },
     });
   } catch (error) {

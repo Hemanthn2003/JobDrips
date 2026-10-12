@@ -1,4 +1,3 @@
-
 import mongoose, { Schema } from "mongoose";
 
 const messageSchema = new Schema(
@@ -28,7 +27,18 @@ const messageSchema = new Schema(
       default: "",
       maxlength: 5000,
     },
+    // NEW: what kind of message this is (demo notifications use "mention").
+    kind: {
+      type: String,
+      enum: ["text", "post_share", "mention"],
+      default: "text",
+    },
     sharedPostId: {
+      type: String,
+      default: null,
+    },
+    // NEW: owner of the shared / mentioned post (needed to open it).
+    sharedPostOwnerId: {
       type: String,
       default: null,
     },

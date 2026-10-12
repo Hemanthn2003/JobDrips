@@ -5,6 +5,14 @@ import { randomUUID } from "node:crypto";
 import Profile, { type IProfile } from "../models/Profile.js";
 import { User } from "../models/User.js";
 import type { AuthenticatedRequest } from "../utils/authMiddleware.js";
+import {
+  getRelationship,
+  listablePosts,
+  makeRelationLookup,
+  serializePost,
+  type RawPost,
+  type Relationship,
+} from "../utils/postHelpers.js";
 
 type UnknownRecord = Record<string, unknown>;
 type ProfileDocument = InstanceType<typeof Profile>;
@@ -96,6 +104,7 @@ const getProfileImages = async (
 /** Friends and requests, each with the person's current profile photo. */
 const attachPhotos = async (
   profile: Pick<IProfile, "friends" | "requests">,
+  relationFor?: (userid: string) => Relationship,
 ) => {
   const friends = profile.friends || [];
   const requests = profile.requests || [];
@@ -111,6 +120,7 @@ const attachPhotos = async (
       username: friend.username,
       friendshipAccepted: friend.friendshipAccepted,
       profileimage: images.get(friend.userid) ?? "",
+      relationship: relationFor ? relationFor(friend.userid) : "friends",
     })),
     requests: requests.map((request) => ({
       profile: {
@@ -190,6 +200,16 @@ const serializeStories = (
     });
 };
 
+/** Posts for a profile grid (light version: no comment bodies). */
+const serializeProfilePosts = (
+  posts: unknown[],
+  viewerId: string,
+  isOwner: boolean,
+) =>
+  listablePosts((posts ?? []) as RawPost[], isOwner).map((post) =>
+    serializePost(post, { viewerId }),
+  );
+
 const getOrCreateProfile = async (
   user: AuthenticatedUser,
 ): Promise<ProfileDocument> => {
@@ -236,6 +256,11 @@ const serializeOwnProfile = async (
   profile: ProfileDocument,
 ) => {
   const { friends, requests } = await attachPhotos(profile);
+  const posts = serializeProfilePosts(
+    profile.posts,
+    user._id.toString(),
+    true,
+  );
 
   return {
     user: {
@@ -259,7 +284,8 @@ const serializeOwnProfile = async (
       experience: profile.experience,
       friends,
       requests,
-      posts: profile.posts,
+      posts,
+      postsCount: posts.length,
       mentionedPosts: profile.mentionedPosts,
       savedPosts: profile.savedPosts,
       stories: serializeStories(profile, user._id.toString()),
@@ -1068,27 +1094,37 @@ export const getPublicProfile = async (
     const viewerId = viewer ? viewer._id.toString() : "";
     const isOwner = viewerId !== "" && viewerId === target.userid;
 
-    let isFriend = false;
+    const viewerProfile =
+      viewer && !isOwner
+        ? await Profile.findOne({ userid: viewerId }).select(
+            "userid friends requests",
+          )
+        : null;
 
-    if (viewer && !isOwner) {
-      const viewerProfile = await Profile.findOne({ userid: viewerId }).select(
-        "userid friends",
-      );
-
-      isFriend = Boolean(viewerProfile && areFriends(viewerProfile, target));
-    }
-
-    const canSeePosts = isOwner || !target.isPrivate || isFriend;
+    const relationship = getRelationship(viewerId, viewerProfile, target);
+    const canSeePosts =
+      isOwner || !target.isPrivate || relationship === "friends";
 
     // The profile document only stores the username; the display name lives on the user.
     const owner = mongoose.isValidObjectId(target.userid)
       ? await User.findById(target.userid).select("name")
       : null;
 
-    const { friends: friendsWithPhotos } = await attachPhotos({
-      friends: target.friends.filter((friend) => friend.friendshipAccepted),
-      requests: [],
-    });
+    // Each friend carries the viewer's relationship to them, so the list can
+    // show "Message" for friends and "Add friend" for everyone else.
+    const { friends: friendsWithPhotos } = await attachPhotos(
+      {
+        friends: target.friends.filter((friend) => friend.friendshipAccepted),
+        requests: [],
+      },
+      makeRelationLookup(viewerId, viewerProfile),
+    );
+
+    const allPosts = (target.posts ?? []) as RawPost[];
+    const postsCount = listablePosts(allPosts, isOwner).length;
+    const posts = canSeePosts
+      ? serializeProfilePosts(allPosts, viewerId, isOwner)
+      : [];
 
     response.status(200).json({
       success: true,
@@ -1102,10 +1138,12 @@ export const getPublicProfile = async (
         profileimage: target.profileimage,
         coverimage: target.coverimage,
         isPrivate: target.isPrivate,
+        relationship,
         education: canSeePosts ? target.education : undefined,
         experience: canSeePosts ? target.experience : undefined,
         friends: friendsWithPhotos,
-        posts: canSeePosts ? target.posts : [],
+        posts,
+        postsCount,
         mentionedPosts: canSeePosts ? target.mentionedPosts : [],
         savedPosts: isOwner ? target.savedPosts : [],
         stories: canSeePosts ? serializeStories(target, viewerId) : [],
@@ -1178,5 +1216,248 @@ export const checkUsernameAvailability = async (
   } catch (error) {
     console.error("Check username failed:", error);
     sendServerError(response, "Unable to check username.");
+  }
+};
+
+// --------------------------------------------------
+// SEND A FRIEND REQUEST
+// POST /api/profiles/:userid/friend-request
+// --------------------------------------------------
+
+export const sendFriendRequest = async (
+  request: Request,
+  response: Response,
+): Promise<void> => {
+  try {
+    const user = await getAuthenticatedUser(request);
+
+    if (!user) {
+      sendUnauthorized(response);
+      return;
+    }
+
+    const viewerId = user._id.toString();
+    const targetId = request.params.userid;
+
+    if (!targetId || targetId === viewerId) {
+      sendBadRequest(response, "You can't send a request to yourself.");
+      return;
+    }
+
+    const [mine, target] = await Promise.all([
+      getOrCreateProfile(user),
+      Profile.findOne({ userid: targetId }),
+    ]);
+
+    if (!target) {
+      response.status(404).json({
+        success: false,
+        message: "Profile not found.",
+      });
+      return;
+    }
+
+    const relation = getRelationship(viewerId, mine, target);
+
+    if (relation !== "none") {
+      const messages: Record<string, string> = {
+        friends: "You are already friends.",
+        requested: "Friend request already sent.",
+        received:
+          "This person already sent you a request. Accept it from your requests.",
+      };
+
+      response.status(409).json({
+        success: false,
+        message: messages[relation] ?? "Request not possible.",
+      });
+      return;
+    }
+
+    // The person receives the request...
+    await Profile.updateOne(
+      { userid: targetId, "requests.profile.userid": { $ne: viewerId } },
+      {
+        $push: {
+          requests: {
+            profile: {
+              userid: viewerId,
+              username: mine.username,
+              bio: mine.bio || "",
+              profileimage: mine.profileimage || user.profilePhoto || "",
+              education: { school: [], college: [] },
+              experience: [],
+            },
+            accept: false,
+            createdAt: new Date(),
+          },
+        },
+      },
+    );
+
+    // ...and the sender keeps a pending entry until it is accepted.
+    await Profile.updateOne(
+      { userid: viewerId, "friends.userid": { $ne: targetId } },
+      {
+        $push: {
+          friends: {
+            userid: targetId,
+            username: target.username,
+            friendshipAccepted: false,
+          },
+        },
+      },
+    );
+
+    response.status(201).json({
+      success: true,
+      message: "Friend request sent.",
+      data: { relationship: "requested" },
+    });
+  } catch (error) {
+    console.error("Send friend request failed:", error);
+    sendServerError(response, "Unable to send the friend request.");
+  }
+};
+
+// --------------------------------------------------
+// ACCEPT A FRIEND REQUEST
+// POST /api/profiles/requests/:requesterId/accept
+// --------------------------------------------------
+
+export const acceptFriendRequest = async (
+  request: Request,
+  response: Response,
+): Promise<void> => {
+  try {
+    const user = await getAuthenticatedUser(request);
+
+    if (!user) {
+      sendUnauthorized(response);
+      return;
+    }
+
+    const viewerId = user._id.toString();
+    const requesterId = request.params.requesterId;
+    const mine = await getOrCreateProfile(user);
+
+    const pending = mine.requests.find(
+      (item) => item.profile.userid === requesterId && !item.accept,
+    );
+
+    const requester = requesterId
+      ? await Profile.findOne({ userid: requesterId }).select("userid username")
+      : null;
+
+    if (!pending || !requester) {
+      response.status(404).json({
+        success: false,
+        message: "Friend request not found.",
+      });
+      return;
+    }
+
+    // My side: mark the request accepted and add them as a friend.
+    await Profile.updateOne(
+      { userid: viewerId },
+      { $set: { "requests.$[r].accept": true } },
+      { arrayFilters: [{ "r.profile.userid": requesterId }] },
+    );
+
+    await Profile.updateOne(
+      { userid: viewerId, "friends.userid": { $ne: requesterId } },
+      {
+        $push: {
+          friends: {
+            userid: requesterId,
+            username: requester.username,
+            friendshipAccepted: true,
+          },
+        },
+      },
+    );
+
+    await Profile.updateOne(
+      { userid: viewerId },
+      { $set: { "friends.$[f].friendshipAccepted": true } },
+      { arrayFilters: [{ "f.userid": requesterId }] },
+    );
+
+    // Their side: their pending entry becomes accepted.
+    await Profile.updateOne(
+      { userid: requesterId },
+      { $set: { "friends.$[f].friendshipAccepted": true } },
+      { arrayFilters: [{ "f.userid": viewerId }] },
+    );
+
+    await Profile.updateOne(
+      { userid: requesterId, "friends.userid": { $ne: viewerId } },
+      {
+        $push: {
+          friends: {
+            userid: viewerId,
+            username: mine.username,
+            friendshipAccepted: true,
+          },
+        },
+      },
+    );
+
+    response.status(200).json({
+      success: true,
+      message: "Friend request accepted.",
+    });
+  } catch (error) {
+    console.error("Accept friend request failed:", error);
+    sendServerError(response, "Unable to accept the friend request.");
+  }
+};
+
+// --------------------------------------------------
+// DECLINE A FRIEND REQUEST
+// POST /api/profiles/requests/:requesterId/decline
+// --------------------------------------------------
+
+export const declineFriendRequest = async (
+  request: Request,
+  response: Response,
+): Promise<void> => {
+  try {
+    const user = await getAuthenticatedUser(request);
+
+    if (!user) {
+      sendUnauthorized(response);
+      return;
+    }
+
+    const viewerId = user._id.toString();
+    const requesterId = request.params.requesterId;
+
+    if (!requesterId) {
+      sendBadRequest(response, "A user ID is required.");
+      return;
+    }
+
+    await Profile.updateOne(
+      { userid: viewerId },
+      { $pull: { requests: { "profile.userid": requesterId } } },
+    );
+
+    await Profile.updateOne(
+      { userid: requesterId },
+      {
+        $pull: {
+          friends: { userid: viewerId, friendshipAccepted: false },
+        },
+      },
+    );
+
+    response.status(200).json({
+      success: true,
+      message: "Friend request declined.",
+    });
+  } catch (error) {
+    console.error("Decline friend request failed:", error);
+    sendServerError(response, "Unable to decline the friend request.");
   }
 };
