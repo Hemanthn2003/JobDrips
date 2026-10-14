@@ -6,10 +6,13 @@ import Profile, { type IProfile } from "../models/Profile.js";
 import { User } from "../models/User.js";
 import type { AuthenticatedRequest } from "../utils/authMiddleware.js";
 import Notification from "../models/Notification.js";
+import { createMessage } from "./messageController.js";
+import { emitToUser } from "../utils/realtime.js";
 import {
   createNotification,
 } from "../utils/notificationService.js";
 import {
+  acceptedFriendIds,
   getRelationship,
   listablePosts,
   loadRequestedIds,
@@ -178,24 +181,34 @@ const serializeStories = (
         new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
     )
     .map((story) => {
-      const viewers = story.viewers || [];
+      // One entry per person, never the owner's own views.
+      const seenIds = new Set<string>();
+      const uniqueViewers = (story.viewers || []).filter((viewer) => {
+        if (seenIds.has(viewer.userId)) return false;
+        seenIds.add(viewer.userId);
+        return true;
+      });
+      const likeIds = new Set<string>((story.likes || []).map(String));
+
       const base = {
         storyId: story.storyId,
         imageUrl: story.imageUrl,
         createdAt: story.createdAt,
         expiresAt: story.expiresAt,
-        seen: viewers.some((viewer) => viewer.userId === viewerId),
+        seen: seenIds.has(viewerId),
+        liked: likeIds.has(viewerId),
       };
 
       if (!isOwner) return base;
 
-      const others = viewers.filter(
+      const others = uniqueViewers.filter(
         (viewer) => viewer.userId !== profile.userid,
       );
 
       return {
         ...base,
         viewCount: others.length,
+        likeCount: likeIds.size,
         viewers: others.map((viewer) => ({
           userId: viewer.userId,
           email: viewer.email,
@@ -204,7 +217,6 @@ const serializeStories = (
       };
     });
 };
-
 /** Posts for a profile grid (light version: no comment bodies). */
 const serializeProfilePosts = (
   posts: unknown[],
@@ -1546,5 +1558,218 @@ export const declineFriendRequest = async (
   } catch (error) {
     console.error("Decline friend request failed:", error);
     sendServerError(response, "Unable to decline the friend request.");
+  }
+};
+
+// --------------------------------------------------
+// Story interactions used by the Messages story viewer.
+// Kept in this existing controller so profileRoutes does not depend on an
+// additional controller file that may be missing from a user's checkout.
+// --------------------------------------------------
+const storyInteractionUserId = (req: Request) =>
+  String((req as AuthenticatedRequest).userId || "");
+
+const storyInteractionFail = (res: Response, status: number, message: string) =>
+  res.status(status).json({ success: false, message });
+
+const getActiveStoryForInteraction = (profile: any, storyId: string) =>
+  profile?.stories?.find(
+    (story: any) =>
+      story.storyId === storyId &&
+      new Date(story.expiresAt).getTime() > Date.now(),
+  );
+
+const emitStoryInteractionChanged = (owner: any, storyId: string, action: string) => {
+  const payload = {
+    ownerUserId: String(owner.userid),
+    storyId,
+    action,
+    at: new Date().toISOString(),
+  };
+  emitToUser(String(owner.userid), "story:updated", payload);
+  for (const friendId of acceptedFriendIds(owner as any)) {
+    emitToUser(friendId, "story:updated", payload);
+  }
+};
+
+export const getStoryInteractions = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const viewerId = storyInteractionUserId(req);
+    const ownerId = String(req.params.userid || "");
+    const storyId = String(req.params.storyId || "");
+    if (!viewerId) {
+      storyInteractionFail(res, 401, "Authentication required.");
+      return;
+    }
+    if (viewerId !== ownerId) {
+      storyInteractionFail(res, 403, "Only the story owner can see its viewer and liker lists.");
+      return;
+    }
+    const owner = await Profile.findOne({ userid: ownerId }).select("userid stories").lean() as any;
+    const story: any = getActiveStoryForInteraction(owner, storyId);
+    if (!owner || !story) {
+      storyInteractionFail(res, 404, "Story not found or expired.");
+      return;
+    }
+
+    // First view per person only, and never the owner's own view.
+    const firstViews = new Map<string, any>();
+    for (const v of story.viewers || []) {
+      const id = String(v.userId);
+      if (id !== ownerId && !firstViews.has(id)) firstViews.set(id, v);
+    }
+    const likeIds: string[] = [...new Set<string>((story.likes || []).map((id: unknown) => String(id)))];
+
+    const profiles = await Profile.find({ userid: { $in: [...firstViews.keys(), ...likeIds] } })
+      .select("userid username profileimage").lean() as any[];
+    const byId = new Map<string, any>(profiles.map((p: any): [string, any] => [String(p.userid), p]));
+
+    const viewers = [...firstViews.values()]
+      .sort((a, b) => new Date(b.viewedAt).getTime() - new Date(a.viewedAt).getTime())
+      .map((v: any) => ({
+        userId: String(v.userId),
+        email: String(v.email || ""),
+        viewedAt: v.viewedAt,
+        username: byId.get(String(v.userId))?.username || "JobDrips user",
+        profileimage: byId.get(String(v.userId))?.profileimage || "",
+      }));
+    const likes = likeIds.map((userId) => ({
+      userId,
+      username: byId.get(userId)?.username || "JobDrips user",
+      profileimage: byId.get(userId)?.profileimage || "",
+    }));
+
+    res.json({ success: true, data: { storyId, viewers, likes, viewCount: viewers.length, likeCount: likes.length } });
+  } catch (error) {
+    console.error("Get story interactions failed:", error);
+    storyInteractionFail(res, 500, "Unable to load story viewers and likes.");
+  }
+};
+
+export const toggleStoryLike = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const viewerId = storyInteractionUserId(req);
+    const ownerId = String(req.params.userid || "");
+    const storyId = String(req.params.storyId || "");
+    if (!viewerId) {
+      storyInteractionFail(res, 401, "Authentication required.");
+      return;
+    }
+    const owner = await Profile.findOne({ userid: ownerId }).select("userid friends stories");
+    const story: any = getActiveStoryForInteraction(owner, storyId);
+    if (!owner || !story) {
+      storyInteractionFail(res, 404, "Story not found or expired.");
+      return;
+    }
+    if (viewerId !== ownerId) {
+      const viewerProfile = await Profile.findOne({ userid: viewerId }).select("friends");
+      if (
+        !viewerProfile ||
+        !acceptedFriendIds(viewerProfile as any).includes(ownerId) ||
+        !acceptedFriendIds(owner as any).includes(viewerId)
+      ) {
+        storyInteractionFail(res, 403, "You can only like a friend's story.");
+        return;
+      }
+    }
+
+    const wasLiked = (story.likes || []).map(String).includes(viewerId);
+
+    // Atomic: a person can only ever be in the likes list once.
+    await Profile.updateOne(
+      { userid: ownerId, "stories.storyId": storyId },
+      wasLiked
+        ? { $pull: { "stories.$.likes": viewerId } }
+        : { $addToSet: { "stories.$.likes": viewerId } },
+    );
+
+    if (!wasLiked && viewerId !== ownerId) {
+      const actor = await Profile.findOne({ userid: viewerId }).select("username").lean() as any;
+      const text = `${actor?.username || "Someone"} liked your story`;
+      await Notification.updateOne(
+        { dedupeKey: `story-like:${storyId}:${viewerId}` },
+        { $set: { notificationId: randomUUID(), dedupeKey: `story-like:${storyId}:${viewerId}`, recipientUserId: ownerId, actorUserId: viewerId, type: "message", text, message: text, read: false, createdAt: new Date() } },
+        { upsert: true },
+      );
+    }
+
+    const fresh = await Profile.findOne({ userid: ownerId }).select("userid stories").lean() as any;
+    const freshStory = fresh?.stories?.find((s: any) => s.storyId === storyId);
+    const likeIds: string[] = [...new Set<string>((freshStory?.likes || []).map(String))];
+
+    emitStoryInteractionChanged(owner, storyId, wasLiked ? "unliked" : "liked");
+
+    const profiles = await Profile.find({ userid: { $in: likeIds } }).select("userid username profileimage").lean() as any[];
+    const byId = new Map<string, any>(profiles.map((p: any): [string, any] => [String(p.userid), p]));
+    const likeDetails = likeIds.map((id) => ({
+      userId: id,
+      username: byId.get(id)?.username || "JobDrips user",
+      profileimage: byId.get(id)?.profileimage || "",
+    }));
+
+    res.json({ success: true, data: { liked: !wasLiked, likes: likeIds, likeDetails, likeCount: likeIds.length } });
+  } catch (error) {
+    console.error("Toggle story like failed:", error);
+    storyInteractionFail(res, 500, "Unable to update story like.");
+  }
+};
+
+export const replyToStory = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const senderId = storyInteractionUserId(req);
+    const ownerId = String(req.params.userid || "");
+    const storyId = String(req.params.storyId || "");
+    const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+    if (!senderId) {
+      storyInteractionFail(res, 401, "Authentication required.");
+      return;
+    }
+    if (!text || text.length > 2000) {
+      storyInteractionFail(res, 400, "Write a reply of up to 2000 characters.");
+      return;
+    }
+    if (senderId === ownerId) {
+      storyInteractionFail(res, 400, "You cannot reply to your own story.");
+      return;
+    }
+    const [sender, owner] = await Promise.all([
+      Profile.findOne({ userid: senderId }).select("friends username profileimage"),
+      Profile.findOne({ userid: ownerId }).select("friends username profileimage stories"),
+    ]);
+    if (
+      !sender || !owner ||
+      !acceptedFriendIds(sender as any).includes(ownerId) ||
+      !acceptedFriendIds(owner as any).includes(senderId)
+    ) {
+      storyInteractionFail(res, 403, "You can only reply to a friend's story.");
+      return;
+    }
+    const story: any = getActiveStoryForInteraction(owner, storyId);
+    if (!story) {
+      storyInteractionFail(res, 404, "Story not found or expired.");
+      return;
+    }
+
+    // createMessage finds (or creates) the personal conversation for these two
+    // people, saves the message in conversation.messages and emits "message:new"
+    // to both users, so no extra socket emits are needed here.
+    const message = await createMessage({
+      senderUserId: senderId, recipientUserId: ownerId, text, kind: "story_reply",
+      storyId, storyOwnerId: ownerId, storyImageUrl: story.imageUrl,
+      storyOwnerName: owner.username, storyOwnerAvatar: owner.profileimage,
+      senderUsername: sender.username, senderAvatar: sender.profileimage,
+    });
+    const conversationId = message.conversationId;
+
+    await Notification.updateOne(
+      { dedupeKey: `story-reply:${message.messageId}` },
+      { $setOnInsert: { notificationId: randomUUID(), dedupeKey: `story-reply:${message.messageId}`, recipientUserId: ownerId, actorUserId: senderId, type: "message", text: `Replied to your story: ${text}`, message: `${sender.username} replied to your story`, read: false, createdAt: new Date() } },
+      { upsert: true },
+    );
+
+    res.status(201).json({ success: true, data: { messageId: message.messageId, conversationId } });
+  } catch (error) {
+    console.error("Reply to story failed:", error);
+    storyInteractionFail(res, 500, "Unable to send story reply.");
   }
 };

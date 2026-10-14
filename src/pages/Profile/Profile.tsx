@@ -3,6 +3,7 @@ import type { ChangeEvent, ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { profileService } from "../../services/profileService";
 import { MessageSheet } from "../../components/post/PostSheets";
+import StoryViewer from "../../components/story/StoryViewer";
 import type {
   Education,
   EducationInput,
@@ -21,7 +22,6 @@ import type {
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const STORY_DURATION_MS = 5000;
 const RING_LOADING_MS = 1500;
 const USERNAME_PATTERN = /^[a-zA-Z0-9_.]{3,30}$/;
 
@@ -81,23 +81,7 @@ const formatDate = (value?: string): string => {
     : date.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
 };
 
-const timeAgo = (value: unknown): string => {
-  if (typeof value !== "string") return "";
-  const time = new Date(value).getTime();
-  if (Number.isNaN(time)) return "";
 
-  const minutes = Math.floor((Date.now() - time) / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days} ${days === 1 ? "day" : "days"} ago`;
-
-  return formatDate(value);
-};
 
 const websiteHref = (value: string): string =>
   /^https?:\/\//i.test(value) ? value : `https://${value}`;
@@ -900,8 +884,6 @@ const Profile = () => {
   const [ringLoading, setRingLoading] = useState(false);
   const [storyViewerOpen, setStoryViewerOpen] = useState(false);
   const [storyIndex, setStoryIndex] = useState(0);
-  const [storyError, setStoryError] = useState("");
-  const [deletingStory, setDeletingStory] = useState(false);
 
   // Stories that are still inside their 24 hours, oldest first.
   const activeStories = (profile?.stories ?? [])
@@ -1404,7 +1386,6 @@ const Profile = () => {
 
   const closeStoryViewer = useCallback(() => {
     setStoryViewerOpen(false);
-    setStoryError("");
   }, []);
 
   // Click on the profile image: spin the ring for 1.5 s, then show the story.
@@ -1422,64 +1403,22 @@ const Profile = () => {
     const startedAt = Date.now();
 
     setRingLoading(true);
-    setStoryError("");
-
-    let failure = "";
 
     try {
       await preloadImage(activeStories[startIndex].imageUrl);
-    } catch (err: unknown) {
-      failure = errMsg(err, "Unable to load this story.");
+    } catch {
+      /* the viewer shows its own error if the image can't load */
     }
 
     await wait(Math.max(0, RING_LOADING_MS - (Date.now() - startedAt)));
 
     setStoryIndex(startIndex);
-    setStoryError(failure);
     setStoryViewerOpen(true);
     setRingLoading(false);
   };
 
-  const changeStory = (direction: 1 | -1) => {
-    const next = storyIndex + direction;
 
-    if (next >= activeStories.length) {
-      closeStoryViewer();
-      return;
-    }
-
-    setStoryError("");
-    setStoryIndex(Math.max(0, next));
-  };
-
-  const removeCurrentStory = async () => {
-    const story = currentStory;
-    if (!story || deletingStory) return;
-
-    setDeletingStory(true);
-    setStoryError("");
-
-    try {
-      await profileService.deleteStory(story.storyId);
-
-      const remaining = activeStories.filter(
-        (item) => item.storyId !== story.storyId,
-      );
-
-      patchProfile({ stories: remaining });
-      setNotice("Story deleted.");
-
-      if (remaining.length === 0) {
-        closeStoryViewer();
-      } else {
-        setStoryIndex(Math.min(storyIndex, remaining.length - 1));
-      }
-    } catch (err: unknown) {
-      setStoryError(errMsg(err, "Unable to delete story."));
-    } finally {
-      setDeletingStory(false);
-    }
-  };
+  
 
   // Record the view (user id + email are taken from the login on the server).
   useEffect(() => {
@@ -1496,23 +1435,6 @@ const Profile = () => {
       .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStory, profile?.userid]);
-
-  // Move to the next story automatically.
-  useEffect(() => {
-    if (!storyViewerOpen || !currentStory) return;
-
-    const timer = window.setTimeout(() => {
-      if (storyIndex + 1 >= activeStories.length) {
-        closeStoryViewer();
-      } else {
-        setStoryError("");
-        setStoryIndex(storyIndex + 1);
-      }
-    }, STORY_DURATION_MS);
-
-    return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storyViewerOpen, storyIndex, currentStory?.storyId, activeStories.length]);
 
   // Warm the cache for the next story.
   useEffect(() => {
@@ -2525,129 +2447,28 @@ const Profile = () => {
       )}
 
       {/* ---------------- Story viewer ---------------- */}
-      {storyViewerOpen && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-[#140D0B] p-0 sm:p-4">
-          <div className="relative flex h-[100dvh] w-full max-w-md items-center justify-center overflow-hidden bg-black sm:h-[min(92dvh,850px)] sm:rounded-3xl">
-            {currentStory ? (
-              <>
-                {storyError ? (
-                  <p className="px-6 text-center text-sm text-white/80">
-                    {storyError}
-                  </p>
-                ) : (
-                  <img
-                    src={currentStory.imageUrl}
-                    alt="Story"
-                    onError={() =>
-                      setStoryError("Unable to load this story image.")
-                    }
-                    className="absolute inset-0 h-full w-full object-contain"
-                  />
-                )}
-
-                {/* Progress bars */}
-                <div className="absolute left-3 right-3 top-3 z-20 flex gap-1">
-                  {activeStories.map((story, index) => (
-                    <span
-                      key={story.storyId}
-                      className="h-1 flex-1 overflow-hidden rounded-full bg-white/35"
-                    >
-                      <span
-                        key={`${story.storyId}-${
-                          index < storyIndex
-                            ? "done"
-                            : index === storyIndex
-                              ? "run"
-                              : "todo"
-                        }`}
-                        data-jd-motion
-                        className="block h-full rounded-full bg-white"
-                        style={
-                          index < storyIndex
-                            ? { width: "100%" }
-                            : index === storyIndex
-                              ? {
-                                  animation: `jd-story-progress ${STORY_DURATION_MS}ms linear forwards`,
-                                }
-                              : { width: "0%" }
-                        }
-                      />
-                    </span>
-                  ))}
-                </div>
-
-                {/* Header */}
-                <div className="absolute left-4 right-4 top-7 z-20 flex items-center justify-between text-white drop-shadow">
-                  <div className="flex items-center gap-2">
-                    <Avatar
-                      src={avatar}
-                      name={displayName}
-                      className="h-9 w-9 border border-white/70"
-                    />
-                    <div className="leading-tight">
-                      <p className="text-sm font-bold">@{profile.username}</p>
-                      <p className="text-[11px] text-white/75">
-                        {timeAgo(currentStory.createdAt)}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={closeStoryViewer}
-                    aria-label="Close story"
-                    className="h-10 w-10 rounded-full bg-black/30 text-3xl"
-                  >
-                    ×
-                  </button>
-                </div>
-
-                {/* Tap zones */}
-                <button
-                  type="button"
-                  aria-label="Previous story"
-                  onClick={() => changeStory(-1)}
-                  className="absolute inset-y-20 left-0 z-10 w-1/3"
-                />
-                <button
-                  type="button"
-                  aria-label="Next story"
-                  onClick={() => changeStory(1)}
-                  className="absolute inset-y-20 right-0 z-10 w-2/3"
-                />
-
-                {/* Footer (views and delete are for the owner) */}
-                {ownProfile && (
-                  <div className="absolute bottom-5 left-4 right-4 z-20 flex items-center justify-between gap-3">
-                    <span className="flex items-center gap-2 rounded-full bg-black/50 px-3 py-2 text-xs font-bold text-white">
-                      <Icon d={ICONS.eye} className="h-4 w-4" />
-                      {currentStory.viewCount ?? 0}{" "}
-                      {(currentStory.viewCount ?? 0) === 1 ? "view" : "views"}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={deletingStory}
-                      onClick={() => void removeCurrentStory()}
-                      className="rounded-full bg-black/50 px-3 py-2 text-xs font-bold text-white disabled:opacity-60"
-                    >
-                      {deletingStory ? "Deleting..." : "Delete story"}
-                    </button>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="px-6 text-center text-white">
-                <p>No active stories.</p>
-                <button
-                  type="button"
-                  onClick={closeStoryViewer}
-                  className="mt-5 rounded-full bg-white/15 px-5 py-2"
-                >
-                  Close
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+           {storyViewerOpen && activeStories.length > 0 && (
+        <StoryViewer
+          person={{
+            userid: profile.userid,
+            username: profile.username,
+            profileimage: avatar,
+            stories: activeStories,
+          }}
+          startIndex={storyIndex}
+          isOwner={ownProfile}
+          onClose={closeStoryViewer}
+          onViewed={markStorySeen}
+          onDeleted={(storyId) => {
+            patchProfile({
+              stories: activeStories.filter((story) => story.storyId !== storyId),
+            });
+            setNotice("Story deleted.");
+          }}
+          onReplied={({ conversationId }) =>
+            navigate(`/messages?chat=${encodeURIComponent(conversationId)}`)
+          }
+        />
       )}
     </main>
   );

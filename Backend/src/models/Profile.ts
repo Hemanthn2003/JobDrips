@@ -282,6 +282,7 @@ const storySchema = new Schema(
     createdAt: { type: Date, default: Date.now, required: true },
     expiresAt: { type: Date, required: true },
     viewers: { type: [storyViewerSchema], default: [] },
+    likes: { type: [String], default: [] },
   },
   { _id: false },
 );
@@ -367,6 +368,7 @@ export interface IProfile extends Document {
       email: string;
       viewedAt: Date;
     }>;
+    likes?: string[];
   }>;
 }
 

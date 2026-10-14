@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 
-import Message from "../models/Message.js";
+import Conversation from "../models/Conversation.js";
 import Notification from "../models/Notification.js";
 import Profile from "../models/Profile.js";
 import type { AuthenticatedRequest } from "../utils/authMiddleware.js";
@@ -41,12 +41,17 @@ const snippet = (text: string, length: number): string =>
 
 /** Number of PEOPLE whose messages I have not read yet (not message count). */
 const countUnseenMessagePeople = async (viewerId: string): Promise<number> => {
-  const senders = await Message.distinct("senderUserId", {
-    recipientUserId: viewerId,
-    readAt: null,
-  });
-
-  return senders.length;
+  const conversations = await Conversation.find({ "members.userId": viewerId }).select("members messages").lean() as any[];
+  const senders = new Set<string>();
+  for (const conversation of conversations) {
+    const mine = (conversation.members || []).find((m: any) => String(m.userId) === viewerId);
+    const clearedAt = mine?.clearedAt ? new Date(mine.clearedAt).getTime() : 0;
+    for (const message of conversation.messages || []) {
+      const sender = String(message.senderUserId || "");
+      if (sender && sender !== viewerId && new Date(message.createdAt).getTime() > clearedAt && !(message.readBy || []).includes(viewerId)) senders.add(sender);
+    }
+  }
+  return senders.size;
 };
 
 // --------------------------------------------------
