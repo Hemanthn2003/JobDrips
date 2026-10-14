@@ -1270,6 +1270,28 @@ const Profile = () => {
     }
   };
 
+  const withdrawRequest = async (targetId: string) => {
+    if (friendBusy) return;
+    setFriendBusy(targetId);
+    setError("");
+
+    try {
+      await profileService.withdrawFriendRequest(targetId);
+
+      if (profile && targetId === profile.userid) {
+        patchProfile({ relationship: "none" });
+      } else {
+        setFriendRelation(targetId, "none");
+      }
+
+      setNotice("Friend request withdrawn.");
+    } catch (err: unknown) {
+      setError(errMsg(err, "Unable to withdraw the friend request."));
+    } finally {
+      setFriendBusy("");
+    }
+  };
+
   const acceptRequest = async (requesterId: string) => {
     if (friendBusy) return;
     setFriendBusy(requesterId);
@@ -1548,6 +1570,11 @@ const Profile = () => {
     (friend: Friend) => friend.friendshipAccepted,
   );
 
+  // Other people's profiles only show counts (their list stays private).
+  const friendsCount = ownProfile
+    ? friends.length
+    : (profile.friendsCount ?? friends.length);
+
   const pendingRequests = (
     ownProfile ? ((profile.requests || []) as IncomingRequest[]) : []
   ).filter((request) => request.accept !== true);
@@ -1715,6 +1742,14 @@ const Profile = () => {
                   {displayName}
                 </h1>
                 <VerifiedBadge />
+                {restricted && (
+                  <span
+                    title="Private account"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#A4543A] text-white"
+                  >
+                    <Icon d={ICONS.lock} className="h-3.5 w-3.5" />
+                  </span>
+                )}
               </div>
               <p className="mt-1 text-sm font-semibold text-[#9B8174]">
                 @{profile.username}
@@ -1776,13 +1811,15 @@ const Profile = () => {
             >
               <button
                 type="button"
-                onClick={() => setFriendsOpen(true)}
+                onClick={() => {
+                  if (!restricted) setFriendsOpen(true);
+                }}
                 aria-label="View friends"
                 className="flex min-w-0 flex-col items-center gap-1 px-1 py-2 transition active:opacity-60"
               >
                 <span className="flex min-h-[28px] max-w-full items-center justify-center gap-1.5">
                   <span className="text-lg font-black leading-none sm:text-xl">
-                    {friends.length}
+                    {friendsCount}
                   </span>
                   <AvatarStack
                     items={friends.map((friend) => ({
@@ -1867,9 +1904,15 @@ const Profile = () => {
                     </button>
                   </>
                 ) : relationship === "requested" ? (
-                  <span className={`${mutedPillClass} px-6 py-2.5 text-sm`}>
+                  <button
+                    type="button"
+                    disabled={friendBusy === profile.userid}
+                    onClick={() => void withdrawRequest(profile.userid)}
+                    title="Click to withdraw your request"
+                    className={`${mutedPillClass} min-w-[130px] px-6 py-2.5 text-sm transition hover:bg-[#F6EAE2] disabled:opacity-50`}
+                  >
                     Requested
-                  </span>
+                  </button>
                 ) : relationship === "received" ? (
                   <button
                     type="button"
@@ -1958,15 +2001,51 @@ const Profile = () => {
           </div>
 
           {restricted ? (
-            <div className="px-5 py-12 text-center sm:py-16">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#F8E9E3] text-[#A4543A]">
-                <Icon d={ICONS.lock} className="h-8 w-8" />
+            relationship === "requested" ? (
+              <div className="px-5 py-12 text-center sm:py-16">
+                <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full border-4 border-[#F0DFD3] bg-[#FFF8F3] text-[#A4543A]">
+                  <Icon d={ICONS.lock} className="h-11 w-11" />
+                </div>
+                <h2 className="mt-5 text-lg font-black">Posts are private</h2>
+                <p className="mx-auto mt-1.5 max-w-xs text-sm leading-6 text-[#80695D]">
+                  This user hasn't accepted your connection request yet.
+                </p>
               </div>
-              <h2 className="mt-5 text-xl font-black">This account is private</h2>
-              <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[#80695D]">
-                Become friends with this member to see their posts.
-              </p>
-            </div>
+            ) : (
+              <div className="px-4 py-6 sm:px-6">
+                <div className="rounded-2xl border border-[#EBD7C8] bg-[#FFFBF8] px-5 py-6 text-center">
+                  <div className="mx-auto flex h-14 w-14 items-center justify-center text-[#A4543A]">
+                    <Icon d={ICONS.lock} className="h-11 w-11" />
+                  </div>
+                  <h2 className="mt-2 text-lg font-black">
+                    This profile is private
+                  </h2>
+                  <p className="mx-auto mt-1.5 max-w-xs text-sm leading-6 text-[#80695D]">
+                    Send a connection request to view their posts, photos and
+                    more.
+                  </p>
+                  {relationship === "received" ? (
+                    <button
+                      type="button"
+                      disabled={friendBusy === profile.userid}
+                      onClick={() => void acceptRequest(profile.userid)}
+                      className={`${actionPillClass} mt-4 w-full px-6 py-3 text-sm`}
+                    >
+                      Accept Connection Request
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={friendBusy === profile.userid}
+                      onClick={() => void sendRequest(profile.userid)}
+                      className={`${actionPillClass} mt-4 w-full px-6 py-3 text-sm`}
+                    >
+                      Send Connection Request
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
           ) : (
             <PostGrid
               onOpen={openPost}

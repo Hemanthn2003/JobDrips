@@ -464,6 +464,7 @@ export default function PostCard({ initialPost, viewer, onRemoved }: Props) {
             <span className="mr-1.5 font-bold text-[#332720]">{post.author.username}</span>
             <span className="whitespace-pre-wrap break-words">
               <RichText
+                mentions={post.mentions}
                 text={expanded || caption.length <= 180 ? caption : `${caption.slice(0, 180).trimEnd()}…`}
               />
             </span>

@@ -1,10 +1,20 @@
-import { NavLink } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { NavLink, useLocation } from "react-router-dom";
+import {
+  NOTIFICATION_REFRESH_EVENT,
+  notificationService,
+} from "../../services/notificationService";
+import type { NotificationSummary } from "../../services/notificationService";
 
 interface NavigationItemProps {
   to: string;
   label: string;
   icon: string;
   activeIcon: string;
+  /** Small red dot (new notifications). */
+  dot?: boolean;
+  /** Small red circle with a number (people with unseen messages). */
+  count?: number;
 }
 
 const NavigationItem = ({
@@ -12,6 +22,8 @@ const NavigationItem = ({
   label,
   icon,
   activeIcon,
+  dot = false,
+  count = 0,
 }: NavigationItemProps) => {
   return (
     <NavLink
@@ -63,6 +75,22 @@ const NavigationItem = ({
               }
             `}
           >
+            {count > 0 && (
+              <span
+                aria-label={`${count} people with unseen messages`}
+                className="absolute right-[6px] top-[8px] z-20 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#D93025] px-1 text-[10px] font-black leading-none text-white ring-2 ring-white"
+              >
+                {count > 9 ? "9+" : count}
+              </span>
+            )}
+
+            {dot && count === 0 && (
+              <span
+                aria-label="New notifications"
+                className="absolute right-[13px] top-[10px] z-20 h-[11px] w-[11px] rounded-full bg-[#D93025] ring-2 ring-white"
+              />
+            )}
+
             <img
               src={isActive ? activeIcon : icon}
               alt=""
@@ -109,7 +137,42 @@ const NavigationItem = ({
   );
 };
 
+const BADGE_POLL_MS = 20000;
+
 const BottomNavigation = () => {
+  const location = useLocation();
+  const [summary, setSummary] = useState<NotificationSummary>({
+    unreadNotifications: 0,
+    unseenMessagePeople: 0,
+  });
+
+  const loadSummary = useCallback(async () => {
+    try {
+      setSummary(await notificationService.getSummary());
+    } catch {
+      // Signed out or offline: keep the last known badges.
+    }
+  }, []);
+
+  // Reload on every page change, on a timer, and when a page asks for it.
+  useEffect(() => {
+    void loadSummary();
+  }, [loadSummary, location.pathname]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => void loadSummary(), BADGE_POLL_MS);
+    const onRefresh = () => void loadSummary();
+
+    window.addEventListener(NOTIFICATION_REFRESH_EVENT, onRefresh);
+    window.addEventListener("focus", onRefresh);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener(NOTIFICATION_REFRESH_EVENT, onRefresh);
+      window.removeEventListener("focus", onRefresh);
+    };
+  }, [loadSummary]);
+
   return (
     <nav
       className="
@@ -152,6 +215,7 @@ const BottomNavigation = () => {
         <NavigationItem
           to="/messages"
           label="Messages"
+          count={summary.unseenMessagePeople}
           icon="/assets/icons/navigation/messages.svg"
           activeIcon="/assets/icons/navigation/messages-active.svg"
         />
@@ -272,6 +336,7 @@ const BottomNavigation = () => {
         <NavigationItem
           to="/notifications"
           label="Notifications"
+          dot={summary.unreadNotifications > 0}
           icon="/assets/icons/navigation/notifications.svg"
           activeIcon="/assets/icons/navigation/notifications-active.svg"
         />

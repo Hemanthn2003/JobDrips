@@ -5,9 +5,14 @@ import { randomUUID } from "node:crypto";
 import Profile, { type IProfile } from "../models/Profile.js";
 import { User } from "../models/User.js";
 import type { AuthenticatedRequest } from "../utils/authMiddleware.js";
+import Notification from "../models/Notification.js";
+import {
+  createNotification,
+} from "../utils/notificationService.js";
 import {
   getRelationship,
   listablePosts,
+  loadRequestedIds,
   makeRelationLookup,
   serializePost,
   type RawPost,
@@ -255,7 +260,9 @@ const serializeOwnProfile = async (
   user: AuthenticatedUser,
   profile: ProfileDocument,
 ) => {
-  const { friends, requests } = await attachPhotos(profile);
+  const { friends: allFriends, requests } = await attachPhotos(profile);
+  // Only accepted friends are ever shown (pending requests live in `requests`).
+  const friends = allFriends.filter((friend) => friend.friendshipAccepted);
   const posts = serializeProfilePosts(
     profile.posts,
     user._id.toString(),
@@ -1112,12 +1119,17 @@ export const getPublicProfile = async (
 
     // Each friend carries the viewer's relationship to them, so the list can
     // show "Message" for friends and "Add friend" for everyone else.
+    const acceptedFriends = target.friends.filter(
+      (friend) => friend.friendshipAccepted,
+    );
+    const requestedIds = await loadRequestedIds(
+      viewerId,
+      acceptedFriends.map((friend) => friend.userid),
+    );
+
     const { friends: friendsWithPhotos } = await attachPhotos(
-      {
-        friends: target.friends.filter((friend) => friend.friendshipAccepted),
-        requests: [],
-      },
-      makeRelationLookup(viewerId, viewerProfile),
+      { friends: acceptedFriends, requests: [] },
+      makeRelationLookup(viewerId, viewerProfile, requestedIds),
     );
 
     const allPosts = (target.posts ?? []) as RawPost[];
@@ -1141,7 +1153,9 @@ export const getPublicProfile = async (
         relationship,
         education: canSeePosts ? target.education : undefined,
         experience: canSeePosts ? target.experience : undefined,
-        friends: friendsWithPhotos,
+        // Locked profiles only expose the counts, never the lists.
+        friends: canSeePosts ? friendsWithPhotos : [],
+        friendsCount: acceptedFriends.length,
         posts,
         postsCount,
         mentionedPosts: canSeePosts ? target.mentionedPosts : [],
@@ -1222,6 +1236,9 @@ export const checkUsernameAvailability = async (
 // --------------------------------------------------
 // SEND A FRIEND REQUEST
 // POST /api/profiles/:userid/friend-request
+//
+// The request is stored ONLY in the receiver's `requests` list. Nobody is
+// added to anybody's friends list until the receiver accepts.
 // --------------------------------------------------
 
 export const sendFriendRequest = async (
@@ -1237,7 +1254,7 @@ export const sendFriendRequest = async (
     }
 
     const viewerId = user._id.toString();
-    const targetId = request.params.userid;
+    const targetId = String(request.params.userid || "");
 
     if (!targetId || targetId === viewerId) {
       sendBadRequest(response, "You can't send a request to yourself.");
@@ -1274,7 +1291,6 @@ export const sendFriendRequest = async (
       return;
     }
 
-    // The person receives the request...
     await Profile.updateOne(
       { userid: targetId, "requests.profile.userid": { $ne: viewerId } },
       {
@@ -1289,25 +1305,29 @@ export const sendFriendRequest = async (
               experience: [],
             },
             accept: false,
+            notified: false,
             createdAt: new Date(),
           },
         },
       },
     );
 
-    // ...and the sender keeps a pending entry until it is accepted.
-    await Profile.updateOne(
-      { userid: viewerId, "friends.userid": { $ne: targetId } },
-      {
-        $push: {
-          friends: {
-            userid: targetId,
-            username: target.username,
-            friendshipAccepted: false,
-          },
-        },
-      },
-    );
+    // Notify once, then remember that it was done.
+    const created = await createNotification({
+      type: "friend_request",
+      recipientUserId: targetId,
+      actorUserId: viewerId,
+      dedupeKey: `friend_request:${viewerId}:${targetId}:${Date.now()}`,
+      message: `${mine.username} sent you a friend request.`,
+    });
+
+    if (created) {
+      await Profile.updateOne(
+        { userid: targetId },
+        { $set: { "requests.$[r].notified": true } },
+        { arrayFilters: [{ "r.profile.userid": viewerId }] },
+      );
+    }
 
     response.status(201).json({
       success: true,
@@ -1317,6 +1337,63 @@ export const sendFriendRequest = async (
   } catch (error) {
     console.error("Send friend request failed:", error);
     sendServerError(response, "Unable to send the friend request.");
+  }
+};
+
+// --------------------------------------------------
+// WITHDRAW A FRIEND REQUEST I SENT
+// DELETE /api/profiles/:userid/friend-request
+// --------------------------------------------------
+
+export const withdrawFriendRequest = async (
+  request: Request,
+  response: Response,
+): Promise<void> => {
+  try {
+    const viewerId = String((request as AuthenticatedRequest).userId || "");
+    const targetId = String(request.params.userid || "");
+
+    if (!viewerId) {
+      sendUnauthorized(response);
+      return;
+    }
+
+    if (!targetId || targetId === viewerId) {
+      sendBadRequest(response, "Choose a request to withdraw.");
+      return;
+    }
+
+    // Removes it from the receiver's list...
+    await Profile.updateOne(
+      { userid: targetId },
+      {
+        $pull: {
+          requests: { "profile.userid": viewerId, accept: false },
+        },
+      },
+    );
+
+    // ...clears any old pending entry from the earlier design...
+    await Profile.updateOne(
+      { userid: viewerId },
+      { $pull: { friends: { userid: targetId, friendshipAccepted: false } } },
+    );
+
+    // ...and removes the notification they were shown.
+    await Notification.deleteMany({
+      type: "friend_request",
+      actorUserId: viewerId,
+      recipientUserId: targetId,
+    });
+
+    response.status(200).json({
+      success: true,
+      message: "Friend request withdrawn.",
+      data: { relationship: "none" },
+    });
+  } catch (error) {
+    console.error("Withdraw friend request failed:", error);
+    sendServerError(response, "Unable to withdraw the friend request.");
   }
 };
 
@@ -1338,7 +1415,7 @@ export const acceptFriendRequest = async (
     }
 
     const viewerId = user._id.toString();
-    const requesterId = request.params.requesterId;
+    const requesterId = String(request.params.requesterId || "");
     const mine = await getOrCreateProfile(user);
 
     const pending = mine.requests.find(
@@ -1357,13 +1434,13 @@ export const acceptFriendRequest = async (
       return;
     }
 
-    // My side: mark the request accepted and add them as a friend.
+    // The request is finished: remove it from my list.
     await Profile.updateOne(
       { userid: viewerId },
-      { $set: { "requests.$[r].accept": true } },
-      { arrayFilters: [{ "r.profile.userid": requesterId }] },
+      { $pull: { requests: { "profile.userid": requesterId } } },
     );
 
+    // Only now do both people become friends of each other.
     await Profile.updateOne(
       { userid: viewerId, "friends.userid": { $ne: requesterId } },
       {
@@ -1378,19 +1455,6 @@ export const acceptFriendRequest = async (
     );
 
     await Profile.updateOne(
-      { userid: viewerId },
-      { $set: { "friends.$[f].friendshipAccepted": true } },
-      { arrayFilters: [{ "f.userid": requesterId }] },
-    );
-
-    // Their side: their pending entry becomes accepted.
-    await Profile.updateOne(
-      { userid: requesterId },
-      { $set: { "friends.$[f].friendshipAccepted": true } },
-      { arrayFilters: [{ "f.userid": viewerId }] },
-    );
-
-    await Profile.updateOne(
       { userid: requesterId, "friends.userid": { $ne: viewerId } },
       {
         $push: {
@@ -1402,6 +1466,27 @@ export const acceptFriendRequest = async (
         },
       },
     );
+
+    // Safety net for entries that were saved as pending by the old design.
+    await Profile.updateOne(
+      { userid: requesterId },
+      { $set: { "friends.$[f].friendshipAccepted": true } },
+      { arrayFilters: [{ "f.userid": viewerId }] },
+    );
+
+    await Notification.deleteMany({
+      type: "friend_request",
+      actorUserId: requesterId,
+      recipientUserId: viewerId,
+    });
+
+    await createNotification({
+      type: "friend_accepted",
+      recipientUserId: requesterId,
+      actorUserId: viewerId,
+      dedupeKey: `friend_accepted:${viewerId}:${requesterId}:${Date.now()}`,
+      message: `${mine.username} accepted your friend request.`,
+    });
 
     response.status(200).json({
       success: true,
@@ -1431,7 +1516,7 @@ export const declineFriendRequest = async (
     }
 
     const viewerId = user._id.toString();
-    const requesterId = request.params.requesterId;
+    const requesterId = String(request.params.requesterId || "");
 
     if (!requesterId) {
       sendBadRequest(response, "A user ID is required.");
@@ -1445,12 +1530,14 @@ export const declineFriendRequest = async (
 
     await Profile.updateOne(
       { userid: requesterId },
-      {
-        $pull: {
-          friends: { userid: viewerId, friendshipAccepted: false },
-        },
-      },
+      { $pull: { friends: { userid: viewerId, friendshipAccepted: false } } },
     );
+
+    await Notification.deleteMany({
+      type: "friend_request",
+      actorUserId: requesterId,
+      recipientUserId: viewerId,
+    });
 
     response.status(200).json({
       success: true,

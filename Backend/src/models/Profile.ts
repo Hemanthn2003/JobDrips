@@ -108,6 +108,10 @@ const commentSchema = new Schema(
     parentCommentId: { type: String, default: null },
     mentions: { type: [mentionedUserSchema], default: [] },
     likes: { type: [String], default: [] },
+    // Id of the person whose post this comment was written on.
+    commentedTo: { type: String, default: "" },
+    // false until the notifications for this comment were created.
+    notified: { type: Boolean, default: false },
     visible: { type: Boolean, default: true },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
@@ -133,6 +137,8 @@ const mentionsSchema = new Schema(
   {
     mentionId: { type: String, required: true },
     mentions: { type: [mentionedUserSchema], default: [] },
+    // Ids of mentioned people who were already notified (never repeated).
+    notifiedUserIds: { type: [String], default: [] },
   },
   { _id: false },
 );
@@ -177,7 +183,7 @@ const postSchema = new Schema(
     saves: { type: [saveSchema], default: [] },
     mentions: {
       type: mentionsSchema,
-      default: () => ({ mentionId: "", mentions: [] }),
+      default: () => ({ mentionId: "", mentions: [], notifiedUserIds: [] }),
     },
     hashtags: { type: [String], default: [] },
     visibility: {
@@ -241,6 +247,11 @@ const requestSchema = new Schema(
       type: Boolean,
       default: false,
       required: true,
+    },
+    // false until the "new friend request" notification was created.
+    notified: {
+      type: Boolean,
+      default: false,
     },
     createdAt: {
       type: Date,
@@ -342,6 +353,7 @@ export interface IProfile extends Document {
       experience: unknown[];
     };
     accept: boolean;
+    notified?: boolean;
     createdAt: Date;
   }>;
 

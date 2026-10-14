@@ -269,7 +269,7 @@ export default function PostComments({ post, viewer, onPostChange, onClose }: Pr
               <p className="break-words text-sm leading-5 text-[#493c34]">
                 <span className="mr-1.5 font-bold text-[#332720]">@{comment.username}</span>
                 <span className="whitespace-pre-wrap">
-                  <RichText text={comment.commentText} />
+                  <RichText text={comment.commentText} mentions={comment.mentions} />
                 </span>
               </p>
 

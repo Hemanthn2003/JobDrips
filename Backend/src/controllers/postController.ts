@@ -20,6 +20,7 @@ import {
   type RelationSource,
 } from "../utils/postHelpers.js";
 import { createMessage } from "./messageController.js";
+import { createNotification } from "../utils/notificationService.js";
 
 // --------------------------------------------------
 // Shared helpers
@@ -166,35 +167,109 @@ const resolveMentions = async (
     .map((person) => ({ userId: person.userid, username: person.username }));
 };
 
-/** Demo notification: a message to each newly mentioned person. */
+interface MentionNotice {
+  senderId: string;
+  senderUsername: string;
+  text: string;
+  postId: string;
+  ownerId: string;
+  commentId?: string;
+  where: "comment" | "post";
+}
+
+/** One "mention" notification per mentioned person (never repeated). */
 const notifyMentions = async (
   mentions: MentionRef[],
-  info: {
-    senderId: string;
-    senderUsername: string;
-    text: string;
-    postId: string;
-    ownerId: string;
-    where: "comment" | "post";
-  },
-): Promise<void> => {
-  const snippet =
-    info.text.length > 120 ? `${info.text.slice(0, 120)}…` : info.text;
+  info: MentionNotice,
+): Promise<string[]> => {
+  const done: string[] = [];
 
   await Promise.all(
     mentions
       .filter((mention) => mention.userId !== info.senderId)
-      .map((mention) =>
-        createMessage({
-          senderUserId: info.senderId,
+      .map(async (mention) => {
+        const key =
+          info.where === "comment"
+            ? `mention:comment:${info.commentId ?? info.postId}:${mention.userId}`
+            : `mention:post:${info.postId}:${mention.userId}`;
+
+        const created = await createNotification({
+          type: "mention",
           recipientUserId: mention.userId,
-          kind: "mention",
-          text: `@${info.senderUsername} mentioned you in a ${info.where}: "${snippet}"`,
-          sharedPostId: info.postId,
-          sharedPostOwnerId: info.ownerId,
-        }),
-      ),
+          actorUserId: info.senderId,
+          dedupeKey: key,
+          message: `${info.senderUsername} mentioned you in a ${info.where}.`,
+          postId: info.postId,
+          postOwnerId: info.ownerId,
+          commentId: info.commentId,
+          text: info.text,
+          mentionIn: info.where,
+        });
+
+        if (created) done.push(mention.userId);
+      }),
   );
+
+  return done;
+};
+
+/**
+ * Notifications for a brand new comment: the post owner, the person being
+ * replied to, and everyone mentioned. Nobody receives two for the same comment.
+ */
+const notifyNewComment = async (info: {
+  commenterId: string;
+  commenterName: string;
+  ownerId: string;
+  postId: string;
+  commentId: string;
+  text: string;
+  parentAuthorId: string | null;
+  mentions: MentionRef[];
+}): Promise<void> => {
+  const mentionedIds = new Set(info.mentions.map((item) => item.userId));
+
+  await notifyMentions(info.mentions, {
+    senderId: info.commenterId,
+    senderUsername: info.commenterName,
+    text: info.text,
+    postId: info.postId,
+    ownerId: info.ownerId,
+    commentId: info.commentId,
+    where: "comment",
+  });
+
+  if (!mentionedIds.has(info.ownerId)) {
+    await createNotification({
+      type: "comment",
+      recipientUserId: info.ownerId,
+      actorUserId: info.commenterId,
+      dedupeKey: `comment:${info.commentId}:${info.ownerId}`,
+      message: `${info.commenterName} commented on your post.`,
+      postId: info.postId,
+      postOwnerId: info.ownerId,
+      commentId: info.commentId,
+      text: info.text,
+    });
+  }
+
+  if (
+    info.parentAuthorId &&
+    info.parentAuthorId !== info.ownerId &&
+    !mentionedIds.has(info.parentAuthorId)
+  ) {
+    await createNotification({
+      type: "comment_reply",
+      recipientUserId: info.parentAuthorId,
+      actorUserId: info.commenterId,
+      dedupeKey: `comment_reply:${info.commentId}:${info.parentAuthorId}`,
+      message: `${info.commenterName} replied to your comment.`,
+      postId: info.postId,
+      postOwnerId: info.ownerId,
+      commentId: info.commentId,
+      text: info.text,
+    });
+  }
 };
 
 const normalizeHashtags = (value: unknown): string[] | null => {
@@ -520,6 +595,8 @@ export const addComment = async (request: Request, response: Response) => {
       parentCommentId,
       mentions,
       likes: [],
+      commentedTo: owner.userid,
+      notified: false,
       visible: true,
       createdAt: now,
       updatedAt: now,
@@ -530,14 +607,34 @@ export const addComment = async (request: Request, response: Response) => {
       { $push: { "posts.$.comments": comment } },
     );
 
-    await notifyMentions(mentions, {
-      senderId: viewerId,
-      senderUsername: viewer?.username ?? "someone",
-      text,
-      postId: post.postId,
+    // Notify once, then mark the comment as notified so it can never repeat.
+    const parentAuthorId = parentCommentId
+      ? ((post.comments ?? []).find(
+          (item) => item.commentId === body.parentCommentId,
+        )?.userId ?? null)
+      : null;
+
+    await notifyNewComment({
+      commenterId: viewerId,
+      commenterName: viewer?.username ?? "Someone",
       ownerId: owner.userid,
-      where: "comment",
+      postId: post.postId,
+      commentId: comment.commentId,
+      text,
+      parentAuthorId,
+      mentions,
     });
+
+    await Profile.updateOne(
+      { userid: owner.userid },
+      { $set: { "posts.$[p].comments.$[c].notified": true } },
+      {
+        arrayFilters: [
+          { "p.postId": post.postId },
+          { "c.commentId": comment.commentId },
+        ],
+      },
+    );
 
     const people = new Map<string, PersonInfo>([
       [
@@ -633,6 +730,7 @@ export const editComment = async (request: Request, response: Response) => {
         text,
         postId: post.postId,
         ownerId: owner.userid,
+        commentId,
         where: "comment",
       },
     );
@@ -779,9 +877,11 @@ export const updatePost = async (request: Request, response: Response) => {
 
       captionText = body.caption.trim();
       const mentions = await resolveMentions(captionText, allowedMentionIds(context));
-      const before = new Set(
-        (post.mentions?.mentions ?? []).map((item) => item.userId),
-      );
+      // People already mentioned or already notified are never notified again.
+      const before = new Set([
+        ...(post.mentions?.mentions ?? []).map((item) => item.userId),
+        ...(post.mentions?.notifiedUserIds ?? []),
+      ]);
 
       newMentions = mentions.filter((mention) => !before.has(mention.userId));
 
@@ -789,10 +889,10 @@ export const updatePost = async (request: Request, response: Response) => {
         captionId: post.captions?.captionId || randomUUID(),
         content: captionText,
       };
-      changes["posts.$[p].mentions"] = {
-        mentionId: post.mentions?.mentionId || randomUUID(),
-        mentions,
-      };
+      // Set the fields one by one so `notifiedUserIds` is never reset.
+      changes["posts.$[p].mentions.mentionId"] =
+        post.mentions?.mentionId || randomUUID();
+      changes["posts.$[p].mentions.mentions"] = mentions;
     }
 
     if (body.hashtags !== undefined) {
@@ -848,7 +948,7 @@ export const updatePost = async (request: Request, response: Response) => {
     );
 
     if (newMentions.length > 0) {
-      await notifyMentions(newMentions, {
+      const notifiedIds = await notifyMentions(newMentions, {
         senderId: viewerId,
         senderUsername: viewer?.username ?? owner.username,
         text: captionText,
@@ -856,6 +956,18 @@ export const updatePost = async (request: Request, response: Response) => {
         ownerId: owner.userid,
         where: "post",
       });
+
+      if (notifiedIds.length > 0) {
+        await Profile.updateOne(
+          { userid: owner.userid },
+          {
+            $addToSet: {
+              "posts.$[p].mentions.notifiedUserIds": { $each: notifiedIds },
+            },
+          },
+          { arrayFilters: [{ "p.postId": post.postId }] },
+        );
+      }
     }
 
     const fresh = await loadRawPost(owner.userid, post.postId);

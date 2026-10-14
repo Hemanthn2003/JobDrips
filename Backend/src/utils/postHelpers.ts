@@ -50,6 +50,8 @@ export interface RawComment {
   parentCommentId?: string | null;
   mentions?: MentionRef[];
   likes?: string[];
+  commentedTo?: string;
+  notified?: boolean;
   visible?: boolean;
   createdAt?: Date | string;
   updatedAt?: Date | string;
@@ -65,7 +67,11 @@ export interface RawPost {
   comments?: RawComment[];
   shares?: Array<{ shareId?: string; fromUserId?: string; toUserId?: string }>;
   saves?: Array<{ saveId?: string; userId: string }>;
-  mentions?: { mentionId?: string; mentions?: MentionRef[] };
+  mentions?: {
+    mentionId?: string;
+    mentions?: MentionRef[];
+    notifiedUserIds?: string[];
+  };
   hashtags?: string[];
   visibility?: "public" | "friends" | "private";
   archived?: boolean;
@@ -119,26 +125,43 @@ export const getRelationship = (
   );
   if (received) return "received";
 
-  const requested =
-    Boolean(mine && !mine.friendshipAccepted) ||
-    (target.requests ?? []).some(
-      (request) => request.profile?.userid === viewerId && !request.accept,
-    );
+  // A request only lives in the receiver's list until it is accepted.
+  const requested = (target.requests ?? []).some(
+    (request) => request.profile?.userid === viewerId && !request.accept,
+  );
 
   return requested ? "requested" : "none";
+};
+
+/** Which of these people already have a pending request from the viewer. */
+export const loadRequestedIds = async (
+  viewerId: string,
+  ids: string[],
+): Promise<Set<string>> => {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (!viewerId || unique.length === 0) return new Set();
+
+  const docs = await Profile.find({
+    userid: { $in: unique },
+    requests: { $elemMatch: { "profile.userid": viewerId, accept: false } },
+  })
+    .select("userid")
+    .lean();
+
+  return new Set(docs.map((doc) => String(doc.userid)));
 };
 
 /** Fast lookup for many people (used for friend lists). */
 export const makeRelationLookup = (
   viewerId: string,
   viewer: RelationSource | null,
+  requestedIds: Set<string> = new Set(),
 ) => {
   const accepted = new Set<string>();
-  const sent = new Set<string>();
   const incoming = new Set<string>();
 
   for (const friend of viewer?.friends ?? []) {
-    (friend.friendshipAccepted ? accepted : sent).add(friend.userid);
+    if (friend.friendshipAccepted) accepted.add(friend.userid);
   }
 
   for (const request of viewer?.requests ?? []) {
@@ -154,7 +177,7 @@ export const makeRelationLookup = (
         ? "friends"
         : incoming.has(userid)
           ? "received"
-          : sent.has(userid)
+          : requestedIds.has(userid)
             ? "requested"
             : "none";
 };

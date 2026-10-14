@@ -8,6 +8,7 @@ import profileRoutes from "./routes/profileRoutes.js";
 import feedRoutes from "./routes/feedRoutes.js";
 import postRoutes from "./routes/postRoutes.js";
 import messageRoutes from "./routes/messageRoutes.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
 
 const app = express();
 
@@ -59,6 +60,9 @@ app.use("/api/posts", postRoutes);
 
 // Message routes (messages, shared posts, mention notifications)
 app.use("/api/messages", messageRoutes);
+
+// Notifications (bell page + red dots)
+app.use("/api/notifications", notificationRoutes);
 
 // Handle unknown routes
 app.use((_request, response) => {

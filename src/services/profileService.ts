@@ -98,6 +98,7 @@ export interface Profile {
   education: Education;
   experience: Experience[];
   friends: Friend[];
+  friendsCount?: number;
   requests?: unknown[];
   posts?: unknown[];
   mentionedPosts?: unknown[];
@@ -412,6 +413,14 @@ export const profileService = {
   removeFriend(userid: string): Promise<{ success: boolean }> {
     return profileRequest<{ success: boolean }>(
       `/friends/${encodeURIComponent(userid)}`,
+      { method: "DELETE" },
+    );
+  },
+
+  /** Cancels a friend request that this profile already sent. */
+  withdrawFriendRequest(userid: string): Promise<{ success: boolean }> {
+    return profileRequest<{ success: boolean }>(
+      `/${encodeURIComponent(userid)}/friend-request`,
       { method: "DELETE" },
     );
   },

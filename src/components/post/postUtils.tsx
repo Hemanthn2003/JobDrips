@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import type { PostData } from "../../services/postService";
 
 export const getPostImages = (post: Pick<PostData, "imageUrl">): string[] =>
@@ -86,20 +87,49 @@ export function PersonAvatar({
 }
 
 /** Text with @mentions and #hashtags highlighted. */
-export function RichText({ text }: { text: string }) {
+export function RichText({
+  text,
+  mentions = [],
+}: {
+  text: string;
+  /** People mentioned in this text; their @name becomes a link to the profile. */
+  mentions?: Array<{ userId: string; username: string }>;
+}) {
   const parts = text.split(/(@[A-Za-z0-9_.]{3,30}|#[A-Za-z0-9_]+)/g);
 
   return (
     <>
-      {parts.map((part, index) =>
-        part.startsWith("@") || part.startsWith("#") ? (
+      {parts.map((part, index) => {
+        if (part.startsWith("@")) {
+          const name = part.slice(1).replace(/\.+$/, "").toLowerCase();
+          const person = mentions.find(
+            (item) => item.username.toLowerCase() === name,
+          );
+
+          return person ? (
+            <Link
+              key={index}
+              to={`/profile/${encodeURIComponent(person.userId)}`}
+              onClick={(event) => event.stopPropagation()}
+              className="font-semibold text-[#9a6e58] hover:underline"
+            >
+              {part}
+            </Link>
+          ) : (
+            <span key={index} className="font-semibold text-[#9a6e58]">
+              {part}
+            </span>
+          );
+        }
+
+        return part.startsWith("#") ? (
           <span key={index} className="font-semibold text-[#9a6e58]">
             {part}
           </span>
         ) : (
           <span key={index}>{part}</span>
-        ),
-      )}
+        );
+      })}
     </>
   );
 }

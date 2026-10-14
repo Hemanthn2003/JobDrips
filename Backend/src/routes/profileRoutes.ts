@@ -15,6 +15,7 @@ import {
   updateProfileImage,
   viewStory,
   sendFriendRequest,
+  withdrawFriendRequest,
   acceptFriendRequest,
   declineFriendRequest,
 } from "../controllers/profileController.js";
@@ -44,6 +45,7 @@ router.delete("/me/experience/:id", authenticate, deleteExperience);
 router.post("/requests/:requesterId/accept", authenticate, acceptFriendRequest);
 router.post("/requests/:requesterId/decline", authenticate, declineFriendRequest);
 router.post("/:userid/friend-request", authenticate, sendFriendRequest);
+router.delete("/:userid/friend-request", authenticate, withdrawFriendRequest);
 
 // Remove an accepted friend (removes it on both profiles)
 router.delete("/friends/:userid", authenticate, removeFriend);
