@@ -15,7 +15,8 @@ import type {
   Relationship,
   Story,
 } from "../../services/profileService";
-
+import { ConfirmModal } from "../../components/common/ConfirmModal";
+import { useSocketEvent } from "../../lib/socket";
 // --------------------------------------------------
 // Constants and small helpers
 // --------------------------------------------------
@@ -964,6 +965,17 @@ const Profile = () => {
     void loadProfile();
   }, [loadProfile]);
 
+  // Live updates: stories (views / likes / new / deleted), posts, friends.
+  const reloadTimer = useRef<number | undefined>(undefined);
+  const reloadSoon = useCallback(() => {
+    window.clearTimeout(reloadTimer.current);
+    reloadTimer.current = window.setTimeout(() => { void loadProfile(true); }, 400);
+  }, [loadProfile]);
+  useEffect(() => () => window.clearTimeout(reloadTimer.current), []);
+  useSocketEvent("story:updated", reloadSoon);
+  useSocketEvent("post:updated", reloadSoon);
+  useSocketEvent("friend:updated", reloadSoon);
+ 
   // Opening a different member's profile starts at the top of the page.
   useEffect(() => {
     window.scrollTo({ top: 0 });
@@ -2353,58 +2365,21 @@ const Profile = () => {
       )}
 
       {/* ---------------- Remove friend confirmation ---------------- */}
-      {removeOpen && !ownProfile && (
-        <div
-          className="fixed inset-0 z-[180] flex items-center justify-center bg-[#2D1D16]/55 p-5 backdrop-blur-sm"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !removing) {
-              setRemoveOpen(false);
-            }
-          }}
-        >
-          <section
-            role="alertdialog"
-            aria-modal="true"
-            aria-label="Remove friend"
-            className="w-full max-w-sm rounded-[28px] border border-[#EBDCD1] bg-[#FFFCF9] p-6 text-center shadow-2xl"
-          >
-            <Avatar
-              src={avatar}
-              name={displayName}
-              className="mx-auto h-16 w-16 text-xl"
-            />
-            <h2 className="mt-4 text-xl font-black text-[#30231E]">
-              Remove friend?
-            </h2>
-            <p className="mt-2 text-sm leading-6 text-[#80695D]">
-              <span className="font-bold text-[#4A3A32]">
-                @{profile.username}
-              </span>{" "}
-              will be removed from your friends list, and you will be removed
-              from theirs. You can send a new friend request later.
-            </p>
-
-            <div className="mt-6 grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                disabled={removing}
-                onClick={() => setRemoveOpen(false)}
-                className="rounded-full border border-[#E0CFC4] bg-white px-5 py-3 text-sm font-bold text-[#6F5A4E] disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={removing}
-                onClick={() => void confirmRemoveFriend()}
-                className="rounded-full bg-[#B4432F] px-5 py-3 text-sm font-extrabold text-white shadow-sm transition hover:bg-[#9A3826] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {removing ? "Removing..." : "Remove"}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
+           <ConfirmModal
+        open={removeOpen && !ownProfile}
+        tone="danger"
+        busy={removing}
+        title="Remove friend?"
+        message={
+          <>
+            <b>@{profile.username}</b> will be removed from your friends list, and you will be
+            removed from theirs. You can send a new friend request later.
+          </>
+        }
+        confirmText="Remove"
+        onConfirm={() => void confirmRemoveFriend()}
+        onCancel={() => { if (!removing) setRemoveOpen(false); }}
+      />
 
       {/* ---------------- Message a friend ---------------- */}
       {messageTarget && (
@@ -2465,9 +2440,7 @@ const Profile = () => {
             });
             setNotice("Story deleted.");
           }}
-          onReplied={({ conversationId }) =>
-            navigate(`/messages?chat=${encodeURIComponent(conversationId)}`)
-          }
+         
         />
       )}
     </main>

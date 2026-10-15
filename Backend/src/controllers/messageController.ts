@@ -17,8 +17,7 @@ const CLOUDINARY_IMAGE = /^https:\/\/res\.cloudinary\.com\/[^/]+\/image\/upload\
 // Colour or Cloudinary image only (prevents CSS injection through the background value).
 const BACKGROUND = /^(#[0-9a-f]{3,8}|image:https:\/\/res\.cloudinary\.com\/[^\s"'()<>\\]+)$/i;
 
-// "direct" is the old name for "personal"; server.ts converts it at startup,
-// but it is accepted here too so nothing breaks before that runs.
+// "direct" is the old name for "personal"; server.ts converts it at startup.
 const PERSONAL_TYPES = ["personal", "direct"];
 
 const attachPerson = async (ids: string[]) => {
@@ -115,6 +114,57 @@ const pushMessage = async (conversation: any, input: NewMessage) => {
   return message;
 };
 
+// ---------------------------------------------------------------------------
+// System notes inside a conversation ("X added Y", "X left", photo changes...)
+// ---------------------------------------------------------------------------
+
+type SystemAction = "created" | "added" | "removed" | "left" | "photo" | "renamed" | "promoted" | "demoted";
+type SystemInput = { action: SystemAction; actorId: string; targetIds?: string[]; detail?: string };
+
+/** Neutral wording used for the chat-list preview and notifications. The chat itself personalises it. */
+const neutralText = (action: SystemAction, actor: string, targets: string[], detail: string) => {
+  const list = targets.join(", ");
+  switch (action) {
+    case "created": return `${actor} created this group`;
+    case "added": return `${actor} added ${list}`;
+    case "removed": return `${actor} removed ${list}`;
+    case "left": return `${actor} left`;
+    case "photo": return detail === "removed" ? `${actor} removed the group photo` : `${actor} changed the group photo`;
+    case "renamed": return `${actor} renamed the group to “${detail}”`;
+    case "promoted": return `${actor} made ${list} an admin`;
+    case "demoted": return `${actor} removed ${list} as admin`;
+    default: return actor;
+  }
+};
+
+const pushSystemMessage = async (conversation: any, input: SystemInput, recipientIds: string[]) => {
+  const targetIds = input.targetIds || [];
+  const people = await attachPerson([input.actorId, ...targetIds]);
+  const nameOf = (id: string) => people.get(id)?.name || people.get(id)?.username || "Someone";
+  const targets = targetIds.map((userId) => ({ userId, name: nameOf(userId) }));
+  const actorName = nameOf(input.actorId);
+  const detail = input.detail || "";
+  const createdAt = new Date();
+  const message = {
+    messageId: randomUUID(), senderUserId: input.actorId, recipientUserId: "",
+    type: "system", text: neutralText(input.action, actorName, targets.map((t) => t.name), detail), imageUrl: "",
+    sharedPostId: null, sharedPostOwnerId: null, storyId: null, storyOwnerId: null, storyImageUrl: null,
+    storyOwnerName: "", storyOwnerAvatar: "", senderUsername: actorName, senderAvatar: "",
+    system: { action: input.action, actorId: input.actorId, actorName, targets, detail },
+    readAt: null,
+    // Already "read" by everyone, so system notes never create unread badges.
+    readBy: [...new Set([...recipientIds, input.actorId])],
+    notified: true, createdAt,
+  };
+  await Conversation.updateOne({ conversationId: conversation.conversationId }, { $push: { messages: message }, $set: { lastMessageAt: createdAt } });
+  const payload = { ...message, kind: "system", sharedPostPreview: null, conversationId: conversation.conversationId };
+  for (const id of recipientIds) emitToUser(id, "message:new", payload);
+  return message;
+};
+
+const safeSystem = (conversation: any, input: SystemInput, recipientIds: string[]) =>
+  pushSystemMessage(conversation, input, recipientIds).catch((error) => console.error("System message failed:", error));
+
 /** Shared by post sharing and story replies. */
 export const createMessage = async (input: NewMessage & { recipientUserId: string }) => {
   const conversation = await ensurePersonal(input.senderUserId, input.recipientUserId);
@@ -134,6 +184,7 @@ const notifyRecipients = async (conversation: any, message: any, senderId: strin
     upsert: true,
   } })));
   await Conversation.updateOne({ conversationId: conversation.conversationId, "messages.messageId": message.messageId }, { $set: { "messages.$.notified": true } });
+  for (const id of recipients) emitToUser(id, "notification:new", { type: "message", conversationId: conversation.conversationId });
 };
 
 export const sendMessage = async (request: Request, response: Response): Promise<void> => {
@@ -179,6 +230,7 @@ const markConversationRead = async (conversation: any, me: string) => {
   const clearedAt = member(conversation, me)?.clearedAt ? new Date(member(conversation, me).clearedAt).getTime() : 0;
   const readIds: string[] = [];
   for (const message of conversation.messages || []) {
+    if (message.type === "system") continue;
     if (new Date(message.createdAt).getTime() <= clearedAt) continue;
     if (String(message.senderUserId) === me || (message.readBy || []).includes(me)) continue;
     readIds.push(String(message.messageId));
@@ -193,6 +245,8 @@ const markConversationRead = async (conversation: any, me: string) => {
   for (const m of conversation.members || []) {
     if (String(m.userId) !== me) emitToUser(String(m.userId), "message:read", { conversationId: conversation.conversationId, messageIds: readIds, readBy: me, readAt: now.toISOString() });
   }
+  // The reader's own unread badges (other tabs / bottom nav) refresh too.
+  emitToUser(me, "conversation:updated", { conversationId: conversation.conversationId });
 };
 
 const fetchConversation = async (conversation: any, me: string) => {
@@ -251,7 +305,7 @@ export const listConversations = async (request: Request, response: Response): P
       const mine = (c.members || []).find((m: any) => String(m.userId) === me);
       const visible = (c.messages || []).filter((m: any) => !mine?.clearedAt || new Date(m.createdAt).getTime() > new Date(mine.clearedAt).getTime());
       const last = visible[visible.length - 1];
-      const unread = visible.filter((m: any) => String(m.senderUserId) !== me && !(m.readBy || []).includes(me)).length;
+      const unread = visible.filter((m: any) => m.type !== "system" && String(m.senderUserId) !== me && !(m.readBy || []).includes(me)).length;
       if (c.type === "group") {
         const people = await attachPerson((c.members || []).map((m: any) => String(m.userId)));
         rows.push({ conversationId: c.conversationId, type: "group", title: c.title, photoUrl: c.photoUrl, lastMessage: lastPreview(last), lastMessageAt: last?.createdAt || c.lastMessageAt, unreadCount: unread, background: mine?.background || "", members: (c.members || []).map((m: any) => ({ ...m, person: people.get(String(m.userId)) })) });
@@ -290,7 +344,7 @@ export const listConversations = async (request: Request, response: Response): P
           };
         }),
     }));
-        response.json({ success: true, data: { conversations: filtered, stories: storyPeople } });
+    response.json({ success: true, data: { conversations: filtered, stories: storyPeople } });
   } catch (error) { console.error("List conversations failed:", error); fail(response, 500, "Unable to load messages."); }
 };
 
@@ -307,6 +361,7 @@ export const createGroup = async (request: Request, response: Response): Promise
     if (ids.some((id) => !accepted.includes(id))) return fail(response, 403, "Groups can only include your accepted friends.");
     const conversation = await Conversation.create({ conversationId: randomUUID(), type: "group", title, createdBy: me, members: [{ userId: me, role: "admin" }, ...ids.map((userId) => ({ userId, role: "member" }))], messages: [] });
     for (const id of ids) emitToUser(id, "conversation:updated", { conversationId: conversation.conversationId });
+    await safeSystem(conversation, { action: "created", actorId: me }, [me, ...ids]);
     response.status(201).json({ success: true, data: { conversationId: conversation.conversationId } });
   } catch (error) { console.error("Create group failed:", error); fail(response, 500, "Unable to create group."); }
 };
@@ -319,7 +374,7 @@ export const getGroupConversation = async (request: Request, response: Response)
     if (!conversation) return fail(response, 403, "You cannot access this group.");
     const messages = await fetchConversation(conversation, me);
     const people = await attachPerson((conversation.members || []).map((m: any) => String(m.userId)));
-    response.json({ success: true, data: { conversationId: id, type: "group", title: conversation.title,photoUrl: conversation.photoUrl || "", members: (conversation.members || []).map((m: any) => ({ ...(m.toObject ? m.toObject() : m), person: people.get(String(m.userId)) })), messages, background: member(conversation, me)?.background || "" } });
+    response.json({ success: true, data: { conversationId: id, type: "group", title: conversation.title, photoUrl: conversation.photoUrl || "", members: (conversation.members || []).map((m: any) => ({ ...(m.toObject ? m.toObject() : m), person: people.get(String(m.userId)) })), messages, background: member(conversation, me)?.background || "" } });
   } catch (error) { console.error("Get group failed:", error); fail(response, 500, "Unable to load group messages."); }
 };
 
@@ -346,7 +401,7 @@ export const searchMessages = async (request: Request, response: Response): Prom
     const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     const messages = conversations.flatMap((c) => {
       const clearedAt = member(c, me)?.clearedAt ? new Date(member(c, me).clearedAt).getTime() : 0;
-      return (c.messages || []).filter((m: any) => new Date(m.createdAt).getTime() > clearedAt && regex.test(String(m.text || ""))).map((m: any) => ({ ...m, conversationId: c.conversationId, kind: m.type === "post" ? "post_share" : m.type }));
+      return (c.messages || []).filter((m: any) => m.type !== "system" && new Date(m.createdAt).getTime() > clearedAt && regex.test(String(m.text || ""))).map((m: any) => ({ ...m, conversationId: c.conversationId, kind: m.type === "post" ? "post_share" : m.type }));
     }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 50);
     response.json({ success: true, data: { messages } });
   } catch (error) { console.error("Search messages failed:", error); fail(response, 500, "Unable to search messages."); }
@@ -372,6 +427,7 @@ export const setChatBackground = async (request: Request, response: Response): P
     if (background && !BACKGROUND.test(background)) return fail(response, 400, "Choose a colour or an uploaded image.");
     const result = await Conversation.updateOne({ conversationId: id, "members.userId": me }, { $set: { "members.$.background": background } });
     if (!result.matchedCount) return fail(response, 403, "Conversation access denied.");
+    emitToUser(me, "conversation:updated", { conversationId: id });
     response.json({ success: true });
   } catch (error) { console.error("Background update failed:", error); fail(response, 500, "Unable to save chat background."); }
 };
@@ -392,13 +448,16 @@ export const updateGroup = async (request: Request, response: Response): Promise
     const targetId = typeof request.body?.userId === "string" ? request.body.userId : "";
     const ids: string[] = [...new Set<string>((Array.isArray(request.body?.memberIds) ? request.body.memberIds : targetId ? [targetId] : []).map((x: unknown) => String(x)))];
     const before: string[] = c.members.map((m: any) => String(m.userId));
+    const events: SystemInput[] = [];
 
     if (action === "rename") {
-      c.title = String(request.body?.title || "").trim().slice(0, 80) || c.title;
+      const title = String(request.body?.title || "").trim().slice(0, 80);
+      if (title && title !== c.title) { c.title = title; events.push({ action: "renamed", actorId: me, detail: title }); }
     } else if (action === "photo") {
       const photoUrl = String(request.body?.photoUrl || "").trim();
       if (photoUrl && !CLOUDINARY_IMAGE.test(photoUrl)) return fail(response, 400, "Upload an image first.");
       c.photoUrl = photoUrl;
+      events.push({ action: "photo", actorId: me, detail: photoUrl ? "changed" : "removed" });
     } else if (action === "add") {
       // Any member can add people, but only from THEIR accepted friends.
       const profile = await Profile.findOne({ userid: me }).select("friends").lean();
@@ -407,24 +466,27 @@ export const updateGroup = async (request: Request, response: Response): Promise
       if (!addIds.length) return fail(response, 400, "Choose friends who are not in the group yet.");
       if (c.members.length + addIds.length > MAX_GROUP_MEMBERS) return fail(response, 400, `A group can have up to ${MAX_GROUP_MEMBERS} members.`);
       c.members.push(...addIds.map((userId) => ({ userId, role: "member" })));
+      events.push({ action: "added", actorId: me, targetIds: addIds });
     } else if (action === "remove") {
       // Admins only. The creator and yourself (use "leave") can't be removed.
       const removeIds = ids.filter((uid) => uid !== me && uid !== founderId && member(c, uid));
       if (!removeIds.length) return fail(response, 400, "That member can't be removed.");
       c.members = c.members.filter((m: any) => !removeIds.includes(String(m.userId)));
+      events.push({ action: "removed", actorId: me, targetIds: removeIds });
     } else if (action === "promote") {
       const target = member(c, targetId);
       if (!target) return fail(response, 404, "Member not found.");
-      target.role = "admin";
+      if (target.role !== "admin") { target.role = "admin"; events.push({ action: "promoted", actorId: me, targetIds: [targetId] }); }
     } else if (action === "demote") {
       const target = member(c, targetId);
       if (!target) return fail(response, 404, "Member not found.");
       if (targetId === founderId) return fail(response, 403, "The group creator always stays an admin.");
       if (c.members.filter((m: any) => m.role === "admin").length <= 1) return fail(response, 400, "A group needs at least one admin.");
-      target.role = "member";
+      if (target.role === "admin") { target.role = "member"; events.push({ action: "demoted", actorId: me, targetIds: [targetId] }); }
     } else if (action === "leave") {
       c.members = c.members.filter((m: any) => String(m.userId) !== me);
       if (c.members.length && !c.members.some((m: any) => m.role === "admin")) c.members[0].role = "admin";
+      events.push({ action: "left", actorId: me });
     } else {
       return fail(response, 400, "Unknown group action.");
     }
@@ -432,7 +494,11 @@ export const updateGroup = async (request: Request, response: Response): Promise
     c.markModified("members");
     await c.save();
 
-    const notify = new Set<string>([...before, ...c.members.map((m: any) => String(m.userId))]);
+    const recipients: string[] = c.members.map((m: any) => String(m.userId));
+    for (const event of events) await safeSystem(c, event, recipients);
+
+    // Everyone involved (including people just removed / who left) refreshes their list.
+    const notify = new Set<string>([...before, ...recipients]);
     for (const uid of notify) emitToUser(uid, "conversation:updated", { conversationId: id });
     response.json({ success: true, data: { conversationId: id } });
   } catch (error) { console.error("Group update failed:", error); fail(response, 500, "Unable to update group."); }

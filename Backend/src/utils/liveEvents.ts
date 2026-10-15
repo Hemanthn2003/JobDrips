@@ -1,0 +1,80 @@
+import type { NextFunction, Request, Response } from "express";
+import Profile from "../models/Profile.js";
+import type { AuthenticatedRequest } from "./authMiddleware.js";
+import { acceptedFriendIds } from "./postHelpers.js";
+import { emitToUser } from "./realtime.js";
+
+/**
+ * Route middlewares that broadcast a "something changed" signal after a
+ * successful request. Payloads never contain private content: clients reload
+ * through their normal authenticated API calls.
+ */
+
+const actorOf = (req: Request) => String((req as AuthenticatedRequest).userId || "");
+
+const friendsOf = async (userId: string): Promise<string[]> => {
+  if (!userId) return [];
+  const owner = (await Profile.findOne({ userid: userId }).select("userid friends").lean()) as any;
+  return owner ? acceptedFriendIds(owner) : [];
+};
+
+const afterSuccess = (res: Response, work: () => Promise<void>) => {
+  res.once("finish", () => {
+    if (res.statusCode < 200 || res.statusCode >= 300) return;
+    void work().catch((error) => console.error("Live update broadcast failed:", error));
+  });
+};
+
+const emitAll = (ids: Iterable<string>, event: string, payload: unknown) => {
+  for (const id of new Set(ids)) if (id) emitToUser(id, event, payload);
+};
+
+/** Story created / deleted / viewed. */
+export const emitStoryChange = (req: Request, res: Response, next: NextFunction) => {
+  afterSuccess(res, async () => {
+    const actorId = actorOf(req);
+    const ownerId = String(req.params.userid || actorId);
+    if (!ownerId) return;
+    const friends = await friendsOf(ownerId);
+    emitAll([ownerId, actorId, ...friends], "story:updated", {
+      ownerUserId: ownerId,
+      actorId,
+      storyId: String(req.params.storyId || ""),
+      action: req.method.toLowerCase(),
+      at: new Date().toISOString(),
+    });
+  });
+  next();
+};
+
+/** Any post change: like, save, share, comment, edit, delete, archive, new post. */
+export const emitPostChange = (req: Request, res: Response, next: NextFunction) => {
+  afterSuccess(res, async () => {
+    const actorId = actorOf(req);
+    const ownerId = String(req.params.ownerId || actorId);
+    if (!ownerId) return;
+    const friends = await friendsOf(ownerId);
+    emitAll([ownerId, actorId, ...friends], "post:updated", {
+      ownerId,
+      actorId,
+      postId: String(req.params.postId || ""),
+      commentId: String(req.params.commentId || ""),
+      action: req.method.toLowerCase(),
+      at: new Date().toISOString(),
+    });
+  });
+  next();
+};
+
+/** Friend request sent / withdrawn / accepted / declined, friend removed. */
+export const emitFriendChange = (req: Request, res: Response, next: NextFunction) => {
+  afterSuccess(res, async () => {
+    const actorId = actorOf(req);
+    const targetId = String(req.params.userid || req.params.requesterId || "");
+    if (!actorId || !targetId) return;
+    const payload = { userId: actorId, otherUserId: targetId, at: new Date().toISOString() };
+    emitAll([actorId, targetId], "friend:updated", payload);
+    emitToUser(targetId, "notification:new", payload);
+  });
+  next();
+};

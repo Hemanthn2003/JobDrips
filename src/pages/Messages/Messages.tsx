@@ -1,21 +1,26 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { io, type Socket } from "socket.io-client";
 import { ArrowLeft, Check, CheckCheck, Image as ImageIcon, MoreHorizontal, Paperclip, Search, Send, Users, X } from "lucide-react";
 import { profileService, type Profile as ProfileData } from "../../services/profileService";
 import StoriesSection, { type StoryPerson } from "../../components/story/StoriesSection";
+import { useConfirm } from "../../components/common/ConfirmModal";
+import { useSocketEvent } from "../../lib/socket";
 import ConversationSheet from "./ConversationSheet";
 import GroupInfoSheet from "./GroupInfoSheet";
 
 const API = (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000").replace(/\/+$/, "");
 type Person = { userid: string; username: string; name?: string; profileimage?: string };
 type SharedPostPreview = { postId: string; ownerId: string; username: string; profileimage: string; imageUrl: string; caption: string };
-type ChatMessage = { messageId: string; conversationId: string; senderUserId: string; recipientUserId?: string; text: string; kind: string; type?: string; imageUrl?: string; sharedPostId?: string | null; sharedPostOwnerId?: string | null; sharedPostPreview?: SharedPostPreview | null; storyId?: string | null; storyOwnerId?: string | null; storyImageUrl?: string | null; senderAvatar?: string; senderUsername?: string; storyOwnerName?: string; readAt?: string | null; readBy?: string[]; createdAt: string };
+type SystemInfo = { action: string; actorId: string; actorName: string; targets: Array<{ userId: string; name: string }>; detail?: string };
+type ChatMessage = { messageId: string; conversationId: string; senderUserId: string; recipientUserId?: string; text: string; kind: string; type?: string; imageUrl?: string; sharedPostId?: string | null; sharedPostOwnerId?: string | null; sharedPostPreview?: SharedPostPreview | null; storyId?: string | null; storyOwnerId?: string | null; storyImageUrl?: string | null; senderAvatar?: string; senderUsername?: string; storyOwnerName?: string; system?: SystemInfo | null; readAt?: string | null; readBy?: string[]; createdAt: string };
 type ConversationRow = { conversationId: string; type: "direct" | "group"; person?: Person; title: string; photoUrl?: string; lastMessage: string; lastMessageAt?: string | null; unreadCount: number; background?: string; members?: Array<{ userId: string; role: string; person?: Person }> };
 type ApiResult<T> = { success: boolean; message?: string; data: T };
 
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+// Same outer spacing as StoriesSection, so the search bar, stories and list line up.
+const EDGE_SPACING = "mx-4 sm:mx-5 lg:mx-6";
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API}${path}`, { ...init, credentials: "include", headers: { ...(init.body && !(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}), ...init.headers } });
@@ -32,6 +37,7 @@ const ago = (value?: string | null) => {
   return `${Math.floor(mins / 1440)}d`;
 };
 const initials = (value = "") => value.trim().slice(0, 1).toUpperCase() || "J";
+const isSystem = (m: Pick<ChatMessage, "kind" | "type">) => m.kind === "system" || m.type === "system";
 const previewOf = (m: Pick<ChatMessage, "text" | "imageUrl" | "sharedPostId" | "kind">) =>
   m.text || (m.imageUrl ? "Sent an image" : m.sharedPostId ? "Shared a post" : m.kind === "story_reply" ? "Replied to a story" : "");
 const imageError = (file: File) => !IMAGE_TYPES.includes(file.type) ? "Choose a JPG, PNG or WebP image." : file.size > MAX_IMAGE_BYTES ? "Images must be 5 MB or smaller." : "";
@@ -42,11 +48,40 @@ const uploadImage = async (file: File) => {
   return uploaded.data.secureUrl;
 };
 
+/** Personalised wording: "You added Alice", "Bob added you", "Bob added Alice". */
+const systemText = (m: ChatMessage, meId?: string) => {
+  const s = m.system;
+  if (!s) return m.text;
+  const actor = s.actorId === meId ? "You" : s.actorName || "Someone";
+  const names = (s.targets || []).map((t) => (t.userId === meId ? "you" : t.name || "someone")).join(", ");
+  switch (s.action) {
+    case "created": return `${actor} created this group`;
+    case "added": return `${actor} added ${names}`;
+    case "removed": return `${actor} removed ${names}`;
+    case "left": return `${actor} left`;
+    case "photo": return s.detail === "removed" ? `${actor} removed the group photo` : `${actor} changed the group photo`;
+    case "renamed": return `${actor} renamed the group to “${s.detail || ""}”`;
+    case "promoted": return `${actor} made ${names} an admin`;
+    case "demoted": return `${actor} removed ${names} as admin`;
+    default: return m.text;
+  }
+};
+
 function Avatar({ src, name, size = "h-12 w-12" }: { src?: string; name?: string; size?: string }) {
   return src ? <img src={src} alt="" className={`${size} shrink-0 rounded-2xl object-cover ring-1 ring-[#ead8cc]`} /> : <div className={`${size} grid shrink-0 place-items-center rounded-2xl bg-[#f2dfd3] font-bold text-[#91452f]`}>{initials(name)}</div>;
 }
 
-function Bubble({ m, mine, meId, group, onImage, onPost }: { m: ChatMessage; mine: boolean; meId?: string; group: boolean; onImage: (url: string) => void; onPost: (m: ChatMessage) => void }) {
+function SystemNote({ m, meId }: { m: ChatMessage; meId?: string }) {
+  return (
+    <div className="flex justify-center px-2">
+      <span className="max-w-[85%] rounded-full bg-white/85 px-3.5 py-1 text-center text-[11px] font-medium text-[#6f5c52] shadow-sm ring-1 ring-[#ead8cc]">
+        {systemText(m, meId)}
+      </span>
+    </div>
+  );
+}
+
+function Bubble({ m, mine, meId, group, onImage, onPost, onMediaLoad }: { m: ChatMessage; mine: boolean; meId?: string; group: boolean; onImage: (url: string) => void; onPost: (m: ChatMessage) => void; onMediaLoad: () => void }) {
   // readBy always contains the sender, so "seen" means someone else is in it.
   const seen = Boolean(m.readAt) || (m.readBy || []).some((id) => id !== m.senderUserId);
   const hasImage = Boolean(m.imageUrl);
@@ -57,21 +92,21 @@ function Bubble({ m, mine, meId, group, onImage, onPost }: { m: ChatMessage; min
         {group && !mine && m.senderUsername && <p className={`text-[11px] font-bold text-[#a65336] ${hasImage ? "px-3 pt-1.5" : "mb-0.5"}`}>{m.senderUsername}</p>}
         {m.kind === "story_reply" && (
           <div className="mb-2 flex items-center gap-2 rounded-xl border border-white/30 p-2 text-xs">
-            <img src={m.storyImageUrl || ""} alt="Story" className="h-14 w-12 rounded-lg object-cover" />
+            <img src={m.storyImageUrl || ""} alt="Story" onLoad={onMediaLoad} className="h-14 w-12 rounded-lg object-cover" />
             <div className="min-w-0">
               <div className="flex items-center gap-1"><img src={m.senderAvatar || ""} alt="" className="h-5 w-5 rounded-full object-cover" /><span className="font-semibold">{m.senderUsername || "Friend"}</span></div>
               <span className="block">Replied to {m.storyOwnerId === meId ? "your" : `${m.storyOwnerName || "a friend"}’s`} story</span>
             </div>
           </div>
         )}
-        {hasImage && <img src={m.imageUrl} alt="Shared" loading="lazy" onClick={() => onImage(m.imageUrl!)} className="block h-auto max-h-80 w-72 max-w-full cursor-zoom-in rounded-xl object-cover" />}
+        {hasImage && <img src={m.imageUrl} alt="Shared" onLoad={onMediaLoad} onClick={() => onImage(m.imageUrl!)} className="block h-auto max-h-80 w-72 max-w-full cursor-zoom-in rounded-xl object-cover" />}
         {m.sharedPostId && (
           <button type="button" onClick={() => onPost(m)} className={`block w-full min-w-[14rem] overflow-hidden rounded-xl border text-left ${mine ? "border-white/30 bg-black/10" : "border-[#ead8cc] bg-[#fffaf6] text-[#3c2d26]"}`}>
             <div className="flex items-center gap-2 p-2">
               <Avatar src={preview?.profileimage} name={preview?.username || "Post owner"} size="h-8 w-8" />
               <span className="truncate text-xs font-bold">{preview?.username || "Shared post"}</span>
             </div>
-            {preview?.imageUrl ? <img src={preview.imageUrl} alt="Post" loading="lazy" className="max-h-64 w-full object-cover" /> : <div className="grid h-24 place-items-center text-xs opacity-70"><ImageIcon size={20} /></div>}
+            {preview?.imageUrl ? <img src={preview.imageUrl} alt="Post" onLoad={onMediaLoad} className="max-h-64 w-full object-cover" /> : <div className="grid h-24 place-items-center text-xs opacity-70"><ImageIcon size={20} /></div>}
             {preview?.caption && <p className="px-3 py-2 text-xs" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{preview.caption}</p>}
           </button>
         )}
@@ -86,6 +121,7 @@ function Bubble({ m, mine, meId, group, onImage, onPost }: { m: ChatMessage; min
 
 const Messages = () => {
   const navigate = useNavigate();
+  const { confirm, dialog } = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
   const chatId = searchParams.get("chat");
   const [me, setMe] = useState<ProfileData | null>(null);
@@ -111,10 +147,11 @@ const Messages = () => {
   const [bgUploading, setBgUploading] = useState(false);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const bgInputRef = useRef<HTMLInputElement | null>(null);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
-  const socketRef = useRef<Socket | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const pinnedRef = useRef(true); // true while the reader is at (or opening) the bottom of the chat
+  const reloadTimer = useRef<number | undefined>(undefined);
 
-  // Refs let the single socket connection always see the latest state.
+  // Refs let the shared socket handlers always see the latest state.
   const activeRef = useRef<ConversationRow | null>(null);
   const meRef = useRef<ProfileData | null>(null);
   const conversationsRef = useRef<ConversationRow[]>([]);
@@ -139,7 +176,26 @@ const Messages = () => {
     finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { void loadLanding(); }, [loadLanding]);
+  /** Coalesces bursts of socket events into one reload. */
+  const loadSoon = useCallback(() => {
+    window.clearTimeout(reloadTimer.current);
+    reloadTimer.current = window.setTimeout(() => { void loadLanding(); }, 300);
+  }, [loadLanding]);
+
+  useEffect(() => { void loadLanding(); return () => window.clearTimeout(reloadTimer.current); }, [loadLanding]);
+
+  const scrollToBottom = useCallback(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+  const onListScroll = () => {
+    const el = listRef.current;
+    if (el) pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+  };
+  const onMediaLoad = useCallback(() => { if (pinnedRef.current) scrollToBottom(); }, [scrollToBottom]);
+
+  // Opening a chat (or receiving a message while at the bottom) always lands on the newest message.
+  useLayoutEffect(() => { if (pinnedRef.current) scrollToBottom(); }, [messages, pending, active?.conversationId, scrollToBottom]);
 
   const appendMessage = useCallback((incoming: ChatMessage) => {
     setMessages((old) => old.some((m) => m.messageId === incoming.messageId) ? old : [...old, incoming]);
@@ -149,16 +205,18 @@ const Messages = () => {
   const applyToList = useCallback((incoming: ChatMessage, viewing: boolean) => {
     if (!conversationsRef.current.some((c) => c.conversationId === incoming.conversationId)) { void loadLanding(); return; }
     const mine = incoming.senderUserId === meRef.current?.userid;
+    const system = isSystem(incoming);
     setConversations((old) => {
       const row = old.find((c) => c.conversationId === incoming.conversationId);
       if (!row) return old;
-      const updated = { ...row, lastMessage: previewOf(incoming), lastMessageAt: incoming.createdAt, unreadCount: viewing || mine ? 0 : row.unreadCount + 1 };
+      const updated = { ...row, lastMessage: previewOf(incoming), lastMessageAt: incoming.createdAt, unreadCount: viewing || mine ? 0 : system ? row.unreadCount : row.unreadCount + 1 };
       return [updated, ...old.filter((c) => c.conversationId !== incoming.conversationId)];
     });
   }, [loadLanding]);
 
   const loadChat = useCallback(async (row: ConversationRow) => {
     activeRef.current = row;
+    pinnedRef.current = true;
     setActive(row); setMessages([]); setBackground(row.background || ""); setError("");
     try {
       const endpoint = row.type === "group"
@@ -166,6 +224,7 @@ const Messages = () => {
         : `/api/messages/conversation/${encodeURIComponent(row.person?.userid || row.conversationId.split(":").find((id) => id !== meRef.current?.userid) || "")}`;
       const result = await api<ApiResult<{ messages: ChatMessage[]; background?: string }>>(endpoint);
       if (activeRef.current?.conversationId !== row.conversationId) return; // user already left
+      pinnedRef.current = true;
       setMessages(result.data.messages || []);
       setBackground(result.data.background || row.background || "");
       setConversations((old) => old.map((c) => c.conversationId === row.conversationId ? { ...c, unreadCount: 0 } : c));
@@ -208,34 +267,28 @@ const Messages = () => {
     }
   }, [conversations, loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ block: "end" }); }, [messages.length, active?.conversationId]);
-
-  // One socket for the whole page lifetime.
-  useEffect(() => {
-    const socket = io(API, { withCredentials: true, transports: ["websocket", "polling"] });
-    socketRef.current = socket;
-    socket.on("message:new", (incoming: ChatMessage) => {
-      const current = activeRef.current;
-      const viewing = current?.conversationId === incoming.conversationId;
-      if (viewing) {
-        appendMessage(incoming);
-        if (incoming.senderUserId !== meRef.current?.userid) {
-          void api(`/api/messages/${encodeURIComponent(incoming.conversationId)}/read`, { method: "POST" }).catch(() => undefined);
-        }
+  // ---------------- Live updates (shared socket) ----------------
+  useSocketEvent<ChatMessage>("message:new", (incoming) => {
+    const current = activeRef.current;
+    const viewing = current?.conversationId === incoming.conversationId;
+    if (viewing) {
+      appendMessage(incoming);
+      if (!isSystem(incoming) && incoming.senderUserId !== meRef.current?.userid) {
+        void api(`/api/messages/${encodeURIComponent(incoming.conversationId)}/read`, { method: "POST" }).catch(() => undefined);
       }
-      applyToList(incoming, viewing);
-    });
-    socket.on("message:read", (event: { conversationId: string; messageIds: string[]; readBy: string; readAt: string }) => {
-      if (event.conversationId !== activeRef.current?.conversationId) return;
-      const ids = new Set(event.messageIds);
-      setMessages((old) => old.map((message) => ids.has(message.messageId)
-        ? { ...message, readAt: event.readAt, readBy: [...new Set([...(message.readBy || []), event.readBy])] }
-        : message));
-    });
-    socket.on("conversation:updated", () => { void loadLanding(); });
-    socket.on("story:updated", () => { void loadLanding(); });
-    return () => { socket.disconnect(); socketRef.current = null; };
-  }, [appendMessage, applyToList, loadLanding]);
+    }
+    applyToList(incoming, viewing);
+  });
+  useSocketEvent<{ conversationId: string; messageIds: string[]; readBy: string; readAt: string }>("message:read", (event) => {
+    if (event.conversationId !== activeRef.current?.conversationId) return;
+    const ids = new Set(event.messageIds);
+    setMessages((old) => old.map((message) => ids.has(message.messageId)
+      ? { ...message, readAt: event.readAt, readBy: [...new Set([...(message.readBy || []), event.readBy])] }
+      : message));
+  });
+  useSocketEvent("conversation:updated", loadSoon);
+  useSocketEvent("story:updated", loadSoon);
+  useSocketEvent("friend:updated", loadSoon);
 
   const clearPending = () => {
     setPending((old) => { if (old) URL.revokeObjectURL(old.preview); return null; });
@@ -261,6 +314,7 @@ const Messages = () => {
       const body = active.type === "group" ? { groupId: active.conversationId, text, imageUrl } : { recipientUserId, text, imageUrl };
       const result = await api<ApiResult<{ messageId: string; conversationId: string; message: ChatMessage }>>("/api/messages/send", { method: "POST", body: JSON.stringify(body) });
       setDraft(""); clearPending();
+      pinnedRef.current = true; // my own message always scrolls into view
       appendMessage(result.data.message); // the socket echo is de-duplicated by messageId
       applyToList(result.data.message, true);
     } catch (e) {
@@ -288,7 +342,14 @@ const Messages = () => {
   };
 
   const clearChat = async () => {
-    if (!active || !window.confirm("Clear this chat only for your account? Other people will still see their messages.")) return;
+    if (!active) return;
+    const ok = await confirm({
+      title: "Clear this chat?",
+      message: "It is cleared only for your account. Other people will still see their messages.",
+      confirmText: "Clear chat",
+      tone: "danger",
+    });
+    if (!ok) return;
     try {
       await api(`/api/messages/${encodeURIComponent(active.conversationId)}/clear`, { method: "DELETE" });
       setMessages([]); setShowOptions(false);
@@ -322,10 +383,8 @@ const Messages = () => {
     setStories((old) => old.map((p) => p.userid === userid ? { ...p, stories: p.stories.map((s) => s.storyId === storyId ? { ...s, seen: true } : s) } : p));
   const handleStoryDeleted = (userid: string, storyId: string) =>
     setStories((old) => old.map((p) => p.userid === userid ? { ...p, stories: p.stories.filter((s) => s.storyId !== storyId) } : p).filter((p) => p.stories.length > 0));
-  const handleStoryReplied = (conversationId: string) => { void loadLanding(); setSearchParams({ chat: conversationId }); };
 
   const filteredConversations = useMemo(() => conversations.filter((c) => `${c.title} ${c.lastMessage}`.toLowerCase().includes(query.toLowerCase())), [conversations, query]);
-  const totalUnread = conversations.reduce((sum, c) => sum + c.unreadCount, 0);
   const activeTitle = active?.type === "group" ? active.title : active?.person?.name || active?.person?.username || active?.title;
   const activeAvatar = active?.type === "group" ? active.photoUrl : active?.person?.profileimage;
 
@@ -333,9 +392,17 @@ const Messages = () => {
     // The whole page scrolls (no inner scroll areas), so the list always uses the full width.
     <div className="fixed inset-x-0 top-16 bottom-16 z-30 overflow-y-auto bg-[#fffaf6] text-[#30241f]">
       <div className="w-full px-3 py-3 sm:px-6">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div><p className="text-xs font-semibold uppercase tracking-[.22em] text-[#ad674c]">JobDrips</p><h1 className="text-2xl font-bold">Messages</h1><p className="text-sm text-[#8c7c73]">Conversations with your friends{totalUnread ? ` · ${totalUnread} unread` : ""}</p></div>
-          <button onClick={() => setShowCreate(true)} className="flex shrink-0 items-center gap-2 rounded-xl bg-gradient-to-r from-[#c77e5d] to-[#98452f] px-4 py-2.5 text-sm font-bold text-white shadow-sm"><Users size={17}/> New group</button>
+        {/* Search bar + New group button (above the stories) */}
+        <div className={`mt-4 sm:mt-5 lg:mt-6 ${EDGE_SPACING}`}>
+          <div className="flex items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search size={17} className="absolute left-3 top-3 text-[#a58a7c]"/>
+              <input value={query} onChange={(e) => void doChatSearch(e.target.value)} placeholder="Search people, conversations, messages..." className="w-full rounded-full border border-[#ebd9ce] bg-[#fffaf6] py-2.5 pl-9 pr-10 text-sm outline-none focus:border-[#bb7455]"/>
+              {query && <button type="button" aria-label="Clear search" onClick={() => { setQuery(""); setSearchResults([]); }} className="absolute right-2 top-1.5 rounded-full p-1.5 text-[#9b7664] hover:bg-[#f5e4da]"><X size={16}/></button>}
+            </div>
+            <button type="button" aria-label="New group" onClick={() => setShowCreate(true)} className="flex shrink-0 items-center gap-2 rounded-full bg-gradient-to-r from-[#c77e5d] to-[#98452f] px-4 py-2.5 text-sm font-bold text-white shadow-sm"><Users size={17}/><span className="hidden sm:inline">New group</span></button>
+          </div>
+          {searchResults.length > 0 && <div className="mt-2 rounded-xl bg-[#fff6ef] p-2">{searchResults.slice(0, 8).map((m) => <button key={m.messageId} onClick={() => { const row = conversations.find((c) => c.conversationId === m.conversationId); if (row) openChat(row); }} className="block w-full border-b border-[#ead8cc] p-2 text-left text-xs last:border-b-0">{m.text || "Shared post"} <span className="block text-[#9c8173]">{ago(m.createdAt)}</span></button>)}</div>}
         </div>
 
         <StoriesSection
@@ -344,27 +411,22 @@ const Messages = () => {
           onAddStory={() => navigate("/profile")}
           onViewed={handleStoryViewed}
           onDeleted={handleStoryDeleted}
-          onReplied={handleStoryReplied}
         />
 
-        <section className="overflow-hidden rounded-3xl border border-[#ead8cc] bg-white shadow-sm">
-          <div className="border-b border-[#f0e2d9] p-4">
-            <div className="relative"><Search size={17} className="absolute left-3 top-3 text-[#a58a7c]"/><input value={query} onChange={(e) => void doChatSearch(e.target.value)} placeholder="Search people, conversations, messages..." className="w-full rounded-full border border-[#ebd9ce] bg-[#fffaf6] py-2.5 pl-9 pr-10 text-sm outline-none focus:border-[#bb7455]"/>{query && <button type="button" aria-label="Clear search" onClick={() => { setQuery(""); setSearchResults([]); }} className="absolute right-2 top-1.5 rounded-full p-1.5 text-[#9b7664] hover:bg-[#f5e4da]"><X size={16}/></button>}</div>
-            {searchResults.length > 0 && <div className="mt-2 rounded-xl bg-[#fff6ef] p-2">{searchResults.slice(0, 8).map((m) => <button key={m.messageId} onClick={() => { const row = conversations.find((c) => c.conversationId === m.conversationId); if (row) openChat(row); }} className="block w-full border-b border-[#ead8cc] p-2 text-left text-xs last:border-b-0">{m.text || "Shared post"} <span className="block text-[#9c8173]">{ago(m.createdAt)}</span></button>)}</div>}
-          </div>
-          <div className="p-2">
-            {loading ? <p className="p-5 text-sm text-[#9c8173]">Loading conversations…</p> : filteredConversations.map((c) => (
-              <button key={c.conversationId} onClick={() => openChat(c)} className="flex w-full items-center gap-3 rounded-2xl p-3 text-left transition hover:bg-[#fff4ed]">
-                <Avatar src={c.type === "group" ? c.photoUrl : c.person?.profileimage} name={c.title}/>
-                <span className="min-w-0 flex-1"><span className="block truncate text-sm font-bold">{c.title}</span><span className="block truncate text-xs text-[#8d7a70]">{c.lastMessage || (c.type === "group" ? "Group conversation" : "Start a conversation")}</span></span>
-                <span className="flex flex-col items-end gap-1">{c.lastMessageAt && <span className="text-[10px] text-[#a18c80]">{ago(c.lastMessageAt)}</span>}{c.unreadCount > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#a84f32] px-1 text-[10px] font-bold text-white">{c.unreadCount}</span>}</span>
-              </button>
-            ))}
-            {!loading && filteredConversations.length === 0 && <div className="p-6 text-center text-sm text-[#9c8173]">No conversations found.</div>}
-          </div>
+        {/* Conversation list: transparent, no border, background or shadow */}
+        <section className={`bg-transparent ${EDGE_SPACING}`}>
+          <h2 className="mb-2 text-left font-bold">Messages</h2>
+          {loading ? <p className="p-5 text-sm text-[#9c8173]">Loading conversations…</p> : filteredConversations.map((c) => (
+            <button key={c.conversationId} onClick={() => openChat(c)} className="flex w-full items-center gap-3 rounded-2xl p-2 text-left transition hover:bg-[#fff4ed]">
+              <Avatar src={c.type === "group" ? c.photoUrl : c.person?.profileimage} name={c.title}/>
+              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-bold">{c.title}</span><span className="block truncate text-xs text-[#8d7a70]">{c.lastMessage || (c.type === "group" ? "Group conversation" : "Start a conversation")}</span></span>
+              <span className="flex flex-col items-end gap-1">{c.lastMessageAt && <span className="text-[10px] text-[#a18c80]">{ago(c.lastMessageAt)}</span>}{c.unreadCount > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#a84f32] px-1 text-[10px] font-bold text-white">{c.unreadCount}</span>}</span>
+            </button>
+          ))}
+          {!loading && filteredConversations.length === 0 && <div className="p-6 text-center text-sm text-[#9c8173]">No conversations found.</div>}
         </section>
 
-        {error && <div className="mt-3 flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><span>{error}</span><button onClick={() => setError("")}><X size={16}/></button></div>}
+        {error && <div className={`mt-3 flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 ${EDGE_SPACING}`}><span>{error}</span><button onClick={() => setError("")}><X size={16}/></button></div>}
       </div>
 
       {active && (
@@ -386,10 +448,11 @@ const Messages = () => {
             {background.startsWith("image:") && <button onClick={() => void saveBackground("")} className="rounded-lg border border-[#e2c7b9] px-3 py-2">Remove image</button>}
             <button onClick={() => void clearChat()} className="ml-auto rounded-lg border border-[#e2c7b9] px-3 py-2 text-[#9b4931]">Clear chat for me</button>
           </div>}
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 sm:p-6">
-            {messages.map((m) => <Bubble key={m.messageId} m={m} mine={m.senderUserId === me?.userid} meId={me?.userid} group={active.type === "group"} onImage={setLightbox} onPost={(post) => navigate(`/profile/${post.sharedPostOwnerId}/posts/${post.sharedPostId}`)} />)}
+          <div ref={listRef} onScroll={onListScroll} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 sm:p-6">
+            {messages.map((m) => isSystem(m)
+              ? <SystemNote key={m.messageId} m={m} meId={me?.userid} />
+              : <Bubble key={m.messageId} m={m} mine={m.senderUserId === me?.userid} meId={me?.userid} group={active.type === "group"} onImage={setLightbox} onPost={(post) => navigate(`/profile/${post.sharedPostOwnerId}/posts/${post.sharedPostId}`)} onMediaLoad={onMediaLoad} />)}
             {messages.length === 0 && <div className="grid h-full place-items-center text-center text-sm text-[#9b8578]">Say hello 👋</div>}
-            <div ref={bottomRef} />
           </div>
           <div className="shrink-0 border-t border-[#f0e2d9] bg-white/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             {pending && <div className="mb-2"><div className="relative inline-block"><img src={pending.preview} alt="Selected" className="h-28 max-w-[14rem] rounded-xl object-cover"/><button type="button" aria-label="Remove image" onClick={clearPending} className="absolute -right-2 -top-2 rounded-full bg-black/70 p-1 text-white"><X size={14}/></button></div></div>}
@@ -410,12 +473,14 @@ const Messages = () => {
           meId={me.userid}
           friends={friends}
           onClose={() => setShowGroupInfo(false)}
-          onChanged={() => void loadLanding()}
+          onChanged={loadSoon}
           onLeft={() => { setShowGroupInfo(false); closeConversation(); void loadLanding(); }}
         />
       )}
 
       {showCreate && <div className="fixed inset-0 z-[100] grid place-items-center bg-black/40 p-4"><div className="w-full max-w-md rounded-3xl bg-[#fffaf6] p-5 shadow-xl"><div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-bold">Create group chat</h2><button onClick={() => setShowCreate(false)}><X/></button></div><label className="text-xs font-bold text-[#98715f]">GROUP NAME</label><input value={groupTitle} onChange={(e) => setGroupTitle(e.target.value)} maxLength={80} placeholder="Project team" className="mb-4 mt-1 w-full rounded-xl border border-[#e8d5c9] bg-white px-3 py-3 outline-none focus:border-[#b86f50]"/><p className="mb-2 text-xs font-bold text-[#98715f]">CHOOSE 2–39 FRIENDS (GROUPS HOLD UP TO 40 PEOPLE)</p><div className="max-h-64 space-y-1 overflow-auto">{friends.map((f) => <label key={f.userid} className="flex cursor-pointer items-center gap-3 rounded-xl p-2 hover:bg-[#fff0e7]"><input type="checkbox" checked={selectedFriends.includes(f.userid)} onChange={(e) => setSelectedFriends((old) => e.target.checked ? [...old, f.userid] : old.filter((id) => id !== f.userid))}/><Avatar src={f.profileimage} name={f.username} size="h-9 w-9"/><span className="text-sm font-semibold">{f.username}</span></label>)}</div><button onClick={() => void createGroup()} disabled={!groupTitle.trim() || selectedFriends.length < 2 || selectedFriends.length > 39} className="mt-4 w-full rounded-xl bg-gradient-to-r from-[#c77e5d] to-[#98452f] px-4 py-3 font-bold text-white disabled:opacity-50">Create group</button></div></div>}
+
+      {dialog}
     </div>
   );
 };

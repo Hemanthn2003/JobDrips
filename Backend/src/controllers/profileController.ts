@@ -1691,6 +1691,7 @@ export const toggleStoryLike = async (req: Request, res: Response): Promise<void
         { $set: { notificationId: randomUUID(), dedupeKey: `story-like:${storyId}:${viewerId}`, recipientUserId: ownerId, actorUserId: viewerId, type: "message", text, message: text, read: false, createdAt: new Date() } },
         { upsert: true },
       );
+             emitToUser(ownerId, "notification:new", { type: "story-like" });
     }
 
     const fresh = await Profile.findOne({ userid: ownerId }).select("userid stories").lean() as any;
@@ -1766,6 +1767,7 @@ export const replyToStory = async (req: Request, res: Response): Promise<void> =
       { $setOnInsert: { notificationId: randomUUID(), dedupeKey: `story-reply:${message.messageId}`, recipientUserId: ownerId, actorUserId: senderId, type: "message", text: `Replied to your story: ${text}`, message: `${sender.username} replied to your story`, read: false, createdAt: new Date() } },
       { upsert: true },
     );
+        emitToUser(ownerId, "notification:new", { type: "story-reply" });
 
     res.status(201).json({ success: true, data: { messageId: message.messageId, conversationId } });
   } catch (error) {

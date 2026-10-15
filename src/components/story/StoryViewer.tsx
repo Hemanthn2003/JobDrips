@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { io } from "socket.io-client";
 import { Eye, Heart, Send, Trash2, X } from "lucide-react";
+import { useSocketEvent } from "../../lib/socket";
+import { useConfirm } from "../common/ConfirmModal";
 
 const API = (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000").replace(/\/+$/, "");
 const IMAGE_STORY_SECONDS = 5;
@@ -29,6 +30,7 @@ type Props = {
   onClose: () => void;
   onViewed?: (storyId: string) => void;
   onDeleted?: (storyId: string) => void;
+  /** Called after a reply was sent (the viewer stays open; nothing else opens). */
   onReplied?: (info: { conversationId: string }) => void;
 };
 
@@ -62,6 +64,7 @@ function Avatar({ src, name, size = "h-9 w-9" }: { src?: string; name?: string; 
 }
 
 export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, onViewed, onDeleted, onReplied }: Props) {
+  const { confirm, dialog } = useConfirm();
   const [stories, setStories] = useState<StoryViewerStory[]>(() => person.stories);
   const [index, setIndex] = useState(() => Math.min(Math.max(0, startIndex), Math.max(0, person.stories.length - 1)));
   const [progress, setProgress] = useState(0);
@@ -73,17 +76,22 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
   const [counts, setCounts] = useState({ views: 0, likes: 0 });
   const [liked, setLiked] = useState(false);
   const [reply, setReply] = useState("");
+  const [replySent, setReplySent] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const elapsed = useRef(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const replyInputRef = useRef<HTMLInputElement | null>(null);
+  const sentTimer = useRef<number | undefined>(undefined);
   const viewedRef = useRef(new Set<string>());
   const currentIdRef = useRef("");
 
   const story = stories[index];
   const paused = holding || replyFocus || panel !== "";
   currentIdRef.current = story?.storyId ?? "";
+
+  useEffect(() => () => window.clearTimeout(sentTimer.current), []);
 
   const move = (direction: 1 | -1) => {
     const next = index + direction;
@@ -112,7 +120,7 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
   useEffect(() => {
     if (!story) return;
     elapsed.current = 0;
-    setProgress(0); setError(""); setPanel(""); setReply("");
+    setProgress(0); setError(""); setPanel(""); setReply(""); setReplySent(false);
     setLiked(Boolean(story.liked));
     setViewers([]); setLikers([]);
     setCounts({ views: story.viewCount ?? 0, likes: story.likeCount ?? 0 });
@@ -130,17 +138,13 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
     }
   }, [story?.storyId, isOwner, person.userid]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Live counts for the owner.
-  useEffect(() => {
+  // Live counts + lists for the owner (shared socket connection).
+  useSocketEvent<{ ownerUserId?: string; storyId?: string }>("story:updated", (payload) => {
     if (!isOwner) return;
-    const socket = io(API, { withCredentials: true, transports: ["websocket", "polling"] });
-    socket.on("story:updated", (payload: { ownerUserId?: string; storyId?: string }) => {
-      if (payload?.ownerUserId && payload.ownerUserId !== person.userid) return;
-      const id = currentIdRef.current;
-      if (id && (!payload?.storyId || payload.storyId === id)) void loadInteractions(id);
-    });
-    return () => { socket.disconnect(); };
-  }, [isOwner, person.userid, loadInteractions]);
+    if (payload?.ownerUserId && payload.ownerUserId !== person.userid) return;
+    const id = currentIdRef.current;
+    if (id && (!payload?.storyId || payload.storyId === id)) void loadInteractions(id);
+  });
 
   // Auto-advance for image stories (progress survives pauses).
   useEffect(() => {
@@ -174,6 +178,7 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
     finally { setBusy(false); }
   };
 
+  // Sends the reply as a message. Nothing else opens: the story keeps playing.
   const sendReply = async () => {
     const text = reply.trim();
     if (!story || !text || busy) return;
@@ -184,14 +189,26 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
         { method: "POST", body: JSON.stringify({ text }) },
       );
       setReply("");
+      setReplyFocus(false);
+      replyInputRef.current?.blur();
+      setReplySent(true);
+      window.clearTimeout(sentTimer.current);
+      sentTimer.current = window.setTimeout(() => setReplySent(false), 2000);
       onReplied?.({ conversationId: result.data.conversationId });
-      onClose();
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to reply to this story."); }
     finally { setBusy(false); }
   };
 
   const deleteStory = async () => {
-    if (!story || busy || !window.confirm("Delete this story? This cannot be undone.")) return;
+    if (!story || busy) return;
+    setHolding(false);
+    const ok = await confirm({
+      title: "Delete this story?",
+      message: "It will be removed for everyone. This cannot be undone.",
+      confirmText: "Delete",
+      tone: "danger",
+    });
+    if (!ok) return;
     setBusy(true); setError("");
     try {
       await api(`/api/profiles/me/stories/${encodeURIComponent(story.storyId)}`, { method: "DELETE" });
@@ -215,93 +232,99 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
     setHolding(value);
   };
 
-  return createPortal(
-    <div className="fixed inset-0 z-[10050] flex items-center justify-center bg-[#140D0B]" onClick={onClose}>
-      <div
-        className="relative h-[100dvh] w-full max-w-md select-none overflow-hidden bg-black sm:h-[min(94dvh,880px)] sm:rounded-3xl"
-        onClick={(e) => e.stopPropagation()}
-        onPointerDown={hold(true)}
-        onPointerUp={hold(false)}
-        onPointerCancel={hold(false)}
-        onPointerLeave={hold(false)}
-      >
-        {/* Progress bars */}
-        <div className="absolute left-3 right-3 top-[max(0.75rem,env(safe-area-inset-top))] z-30 flex gap-1.5">
-          {stories.map((item, i) => (
-            <div key={item.storyId} className="h-1 flex-1 overflow-hidden rounded-full bg-white/35">
-              <div className="h-full rounded-full bg-white transition-[width] duration-100 ease-linear" style={{ width: i < index ? "100%" : i > index ? "0%" : `${progress}%` }} />
+  return (
+    <>
+      {createPortal(
+        <div className="fixed inset-0 z-[10050] flex items-center justify-center bg-[#140D0B]" onClick={onClose}>
+          <div
+            className="relative h-[100dvh] w-full max-w-md select-none overflow-hidden bg-black sm:h-[min(94dvh,880px)] sm:rounded-3xl"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={hold(true)}
+            onPointerUp={hold(false)}
+            onPointerCancel={hold(false)}
+            onPointerLeave={hold(false)}
+          >
+            {/* Progress bars */}
+            <div className="absolute left-3 right-3 top-[max(0.75rem,env(safe-area-inset-top))] z-30 flex gap-1.5">
+              {stories.map((item, i) => (
+                <div key={item.storyId} className="h-1 flex-1 overflow-hidden rounded-full bg-white/35">
+                  <div className="h-full rounded-full bg-white transition-[width] duration-100 ease-linear" style={{ width: i < index ? "100%" : i > index ? "0%" : `${progress}%` }} />
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
 
-        {/* Header */}
-        <header className="absolute left-4 right-4 top-[calc(max(0.75rem,env(safe-area-inset-top))+0.9rem)] z-30 flex items-center gap-2 text-white">
-          <Avatar src={person.profileimage} name={person.username} />
-          <span className="font-semibold">{person.username}</span>
-          <span className="text-xs text-white/70">{ago(story.createdAt)}</span>
-          <button type="button" data-nohold aria-label="Close story" className="ml-auto rounded-full bg-black/40 p-1.5" onClick={onClose}><X size={20} /></button>
-        </header>
+            {/* Header */}
+            <header className="absolute left-4 right-4 top-[calc(max(0.75rem,env(safe-area-inset-top))+0.9rem)] z-30 flex items-center gap-2 text-white">
+              <Avatar src={person.profileimage} name={person.username} />
+              <span className="font-semibold">{person.username}</span>
+              <span className="text-xs text-white/70">{ago(story.createdAt)}</span>
+              <button type="button" data-nohold aria-label="Close story" className="ml-auto rounded-full bg-black/40 p-1.5" onClick={onClose}><X size={20} /></button>
+            </header>
 
-        {/* Media */}
-        {video ? (
-          <video
-            key={story.storyId} ref={videoRef} src={mediaUrl} autoPlay playsInline className="h-full w-full object-contain"
-            onTimeUpdate={(e) => { const v = e.currentTarget; if (Number.isFinite(v.duration) && v.duration > 0) setProgress(Math.min(100, (v.currentTime / v.duration) * 100)); }}
-            onEnded={() => move(1)}
-            onError={() => setError("Unable to load this story.")}
-          />
-        ) : (
-          <img key={story.storyId} src={mediaUrl} alt="Story" draggable={false} className="h-full w-full object-contain" onError={() => setError("Unable to load this story image.")} />
-        )}
-
-        {error && <p role="alert" className="absolute left-4 right-4 top-28 z-30 rounded-xl bg-red-600/90 px-3 py-2 text-center text-xs font-semibold text-white">{error}</p>}
-
-        {/* Tap zones */}
-        <button type="button" aria-label="Previous story" onClick={() => move(-1)} className={`absolute inset-y-24 left-0 z-20 w-[35%] ${panel ? "pointer-events-none" : ""}`} />
-        <button type="button" aria-label="Next story" onClick={() => move(1)} className={`absolute inset-y-24 right-0 z-20 w-[65%] ${panel ? "pointer-events-none" : ""}`} />
-
-        {/* Footer */}
-        {isOwner ? (
-          <div data-nohold className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 bg-gradient-to-t from-black/90 to-transparent p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-12 text-white">
-            <button type="button" onClick={() => setPanel(panel === "views" ? "" : "views")} className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-2 text-xs font-semibold"><Eye size={15} /> {counts.views} {counts.views === 1 ? "view" : "views"}</button>
-            <button type="button" onClick={() => setPanel(panel === "likes" ? "" : "likes")} className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-2 text-xs font-semibold"><Heart size={15} /> {counts.likes} {counts.likes === 1 ? "like" : "likes"}</button>
-            <button type="button" disabled={busy} onClick={() => void deleteStory()} className="ml-auto flex items-center gap-1.5 rounded-full bg-red-500/85 px-3 py-2 text-xs font-semibold disabled:opacity-60"><Trash2 size={15} /> Delete</button>
-          </div>
-        ) : (
-          <div data-nohold className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 bg-gradient-to-t from-black/90 to-transparent p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-12">
-            <form onSubmit={(e) => { e.preventDefault(); void sendReply(); }} className="flex min-w-0 flex-1 items-center gap-2">
-              <input
-                value={reply} onChange={(e) => setReply(e.target.value)} onFocus={() => setReplyFocus(true)} onBlur={() => setReplyFocus(false)}
-                placeholder="Reply to story…" maxLength={2000}
-                className="min-w-0 flex-1 rounded-full border border-white/40 bg-black/35 px-4 py-3 text-sm text-white outline-none placeholder:text-white/70"
+            {/* Media */}
+            {video ? (
+              <video
+                key={story.storyId} ref={videoRef} src={mediaUrl} autoPlay playsInline className="h-full w-full object-contain"
+                onTimeUpdate={(e) => { const v = e.currentTarget; if (Number.isFinite(v.duration) && v.duration > 0) setProgress(Math.min(100, (v.currentTime / v.duration) * 100)); }}
+                onEnded={() => move(1)}
+                onError={() => setError("Unable to load this story.")}
               />
-              <button type="submit" disabled={!reply.trim() || busy} aria-label="Send reply" className="rounded-full bg-[#a94f32] p-3 text-white disabled:opacity-50"><Send size={17} /></button>
-            </form>
-            <button type="button" disabled={busy} onClick={() => void toggleLike()} aria-label={liked ? "Unlike story" : "Like story"} className={`rounded-full p-3 ${liked ? "bg-[#b64d36] text-white" : "bg-white/15 text-white"}`}><Heart size={19} fill={liked ? "currentColor" : "none"} /></button>
-          </div>
-        )}
+            ) : (
+              <img key={story.storyId} src={mediaUrl} alt="Story" draggable={false} className="h-full w-full object-contain" onError={() => setError("Unable to load this story image.")} />
+            )}
 
-        {/* Views / likes list (owner) */}
-        {isOwner && panel && (
-          <div data-nohold className="absolute inset-x-0 bottom-0 z-40 max-h-[65%] overflow-y-auto rounded-t-3xl bg-[#1d1512] p-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-white">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="font-bold">{panel === "views" ? `Views · ${counts.views}` : `Likes · ${counts.likes}`}</h3>
-              <button type="button" aria-label="Close list" onClick={() => setPanel("")} className="rounded-full bg-white/10 p-1.5"><X size={18} /></button>
-            </div>
-            {list.length === 0 ? (
-              <p className="py-4 text-center text-sm text-white/60">{panel === "views" ? "No views yet." : "No likes yet."}</p>
-            ) : list.map((item) => (
-              <div key={`${panel}-${item.userId}`} className="flex items-center gap-3 py-2">
-                <Avatar src={item.profileimage} name={item.username} size="h-10 w-10" />
-                <span className="min-w-0 flex-1 truncate text-sm font-semibold">{item.username}</span>
-                {panel === "views" && <span className="text-xs text-white/60">{ago(item.viewedAt)}</span>}
-                {panel === "likes" && <Heart size={15} className="text-[#e0664b]" fill="currentColor" />}
+            {error && <p role="alert" className="absolute left-4 right-4 top-28 z-30 rounded-xl bg-red-600/90 px-3 py-2 text-center text-xs font-semibold text-white">{error}</p>}
+            {replySent && <p role="status" className="absolute left-1/2 top-28 z-30 -translate-x-1/2 rounded-full bg-black/70 px-4 py-2 text-xs font-semibold text-white">Reply sent ✓</p>}
+
+            {/* Tap zones */}
+            <button type="button" aria-label="Previous story" onClick={() => move(-1)} className={`absolute inset-y-24 left-0 z-20 w-[35%] ${panel ? "pointer-events-none" : ""}`} />
+            <button type="button" aria-label="Next story" onClick={() => move(1)} className={`absolute inset-y-24 right-0 z-20 w-[65%] ${panel ? "pointer-events-none" : ""}`} />
+
+            {/* Footer */}
+            {isOwner ? (
+              <div data-nohold className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 bg-gradient-to-t from-black/90 to-transparent p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-12 text-white">
+                <button type="button" onClick={() => setPanel(panel === "views" ? "" : "views")} className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-2 text-xs font-semibold"><Eye size={15} /> {counts.views} {counts.views === 1 ? "view" : "views"}</button>
+                <button type="button" onClick={() => setPanel(panel === "likes" ? "" : "likes")} className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-2 text-xs font-semibold"><Heart size={15} /> {counts.likes} {counts.likes === 1 ? "like" : "likes"}</button>
+                <button type="button" disabled={busy} onClick={() => void deleteStory()} className="ml-auto flex items-center gap-1.5 rounded-full bg-red-500/85 px-3 py-2 text-xs font-semibold disabled:opacity-60"><Trash2 size={15} /> Delete</button>
               </div>
-            ))}
+            ) : (
+              <div data-nohold className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 bg-gradient-to-t from-black/90 to-transparent p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-12">
+                <form onSubmit={(e) => { e.preventDefault(); void sendReply(); }} className="flex min-w-0 flex-1 items-center gap-2">
+                  <input
+                    ref={replyInputRef} value={reply} onChange={(e) => setReply(e.target.value)} onFocus={() => setReplyFocus(true)} onBlur={() => setReplyFocus(false)}
+                    placeholder="Reply to story…" maxLength={2000}
+                    className="min-w-0 flex-1 rounded-full border border-white/40 bg-black/35 px-4 py-3 text-sm text-white outline-none placeholder:text-white/70"
+                  />
+                  <button type="submit" disabled={!reply.trim() || busy} aria-label="Send reply" className="rounded-full bg-[#a94f32] p-3 text-white disabled:opacity-50"><Send size={17} /></button>
+                </form>
+                <button type="button" disabled={busy} onClick={() => void toggleLike()} aria-label={liked ? "Unlike story" : "Like story"} className={`rounded-full p-3 ${liked ? "bg-[#b64d36] text-white" : "bg-white/15 text-white"}`}><Heart size={19} fill={liked ? "currentColor" : "none"} /></button>
+              </div>
+            )}
+
+            {/* Views / likes list (owner) */}
+            {isOwner && panel && (
+              <div data-nohold className="absolute inset-x-0 bottom-0 z-40 max-h-[65%] overflow-y-auto rounded-t-3xl bg-[#1d1512] p-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-white">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="font-bold">{panel === "views" ? `Views · ${counts.views}` : `Likes · ${counts.likes}`}</h3>
+                  <button type="button" aria-label="Close list" onClick={() => setPanel("")} className="rounded-full bg-white/10 p-1.5"><X size={18} /></button>
+                </div>
+                {list.length === 0 ? (
+                  <p className="py-4 text-center text-sm text-white/60">{panel === "views" ? "No views yet." : "No likes yet."}</p>
+                ) : list.map((item) => (
+                  <div key={`${panel}-${item.userId}`} className="flex items-center gap-3 py-2">
+                    <Avatar src={item.profileimage} name={item.username} size="h-10 w-10" />
+                    <span className="min-w-0 flex-1 truncate text-sm font-semibold">{item.username}</span>
+                    {panel === "views" && <span className="text-xs text-white/60">{ago(item.viewedAt)}</span>}
+                    {panel === "likes" && <Heart size={15} className="text-[#e0664b]" fill="currentColor" />}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
-    </div>,
-    document.body,
+        </div>,
+        document.body,
+      )}
+      {dialog}
+    </>
   );
 }

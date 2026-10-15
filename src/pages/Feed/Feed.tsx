@@ -1,37 +1,71 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Image as ImageIcon, RefreshCw } from "lucide-react";
 import PostCard from "../../components/post/PostCard";
 import { getFeed } from "../../services/postService";
 import type { PostData, PostPerson } from "../../services/postService";
+import { useSocketEvent } from "../../lib/socket";
+
+/** Small stable fingerprint, so only posts that really changed are re-rendered fresh. */
+const fingerprint = (post: PostData): number => {
+  const text = JSON.stringify(post);
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) | 0;
+  }
+  return hash;
+};
 
 const Feed = () => {
   const [posts, setPosts] = useState<PostData[]>([]);
   const [viewer, setViewer] = useState<PostPerson | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const reloadTimer = useRef<number | undefined>(undefined);
+  const viewerRef = useRef<PostPerson | null>(null);
+  viewerRef.current = viewer;
 
-  const loadFeed = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  // silent = refresh in the background (no skeleton, errors ignored).
+  const loadFeed = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
 
     try {
       const result = await getFeed();
       setPosts(result.posts);
       setViewer(result.viewer);
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Something went wrong while loading your feed.",
-      );
+      if (!silent) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Something went wrong while loading your feed.",
+        );
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void loadFeed();
   }, [loadFeed]);
+
+  useEffect(() => () => window.clearTimeout(reloadTimer.current), []);
+
+  // Live updates: another person liked, commented, saved, shared, edited,
+  // archived or deleted a post (or published a new one).
+  useSocketEvent<{ actorId?: string }>("post:updated", (payload) => {
+    const me = (viewerRef.current as unknown as { userid?: string } | null)?.userid;
+    // My own actions are already shown instantly on screen.
+    if (me && payload?.actorId === me) return;
+
+    window.clearTimeout(reloadTimer.current);
+    reloadTimer.current = window.setTimeout(() => {
+      void loadFeed(true);
+    }, 400);
+  });
 
   const removePost = useCallback((postId: string) => {
     setPosts((previous) => previous.filter((post) => post.postId !== postId));
@@ -101,7 +135,9 @@ const Feed = () => {
             <section className="min-w-0 space-y-5">
               {posts.map((post) => (
                 <PostCard
-                  key={`${post.userid}-${post.postId}`}
+                  // The fingerprint changes only when this post's data changed,
+                  // so a live update refreshes just that card.
+                  key={`${post.userid}-${post.postId}-${fingerprint(post)}`}
                   initialPost={post}
                   viewer={viewer}
                   onRemoved={removePost}

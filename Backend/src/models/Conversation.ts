@@ -11,12 +11,26 @@ const memberSchema = new Schema({
   muted: { type: Boolean, default: false },
 }, { _id: false });
 
+// Structured data for "X added Y", "X left", "X changed the group photo" ...
+const systemTargetSchema = new Schema({
+  userId: { type: String, default: "" },
+  name: { type: String, default: "" },
+}, { _id: false });
+
+const systemSchema = new Schema({
+  action: { type: String, enum: ["created", "added", "removed", "left", "photo", "renamed", "promoted", "demoted"], required: true },
+  actorId: { type: String, default: "" },
+  actorName: { type: String, default: "" },
+  targets: { type: [systemTargetSchema], default: [] },
+  detail: { type: String, default: "" },
+}, { _id: false });
+
 const messageSchema = new Schema({
   messageId: { type: String, required: true },
   senderUserId: { type: String, required: true },
   recipientUserId: { type: String, default: "" }, // personal chats only
-  type: { type: String, enum: ["text", "image", "post", "story_reply", "mention"], default: "text" },
-  text: { type: String, default: "", maxlength: 5000 }, // caption / message text
+  type: { type: String, enum: ["text", "image", "post", "story_reply", "mention", "system"], default: "text" },
+  text: { type: String, default: "", maxlength: 5000 }, // caption / message text / neutral system text
   imageUrl: { type: String, default: "" },
   sharedPostId: { type: String, default: null },
   sharedPostOwnerId: { type: String, default: null },
@@ -27,6 +41,7 @@ const messageSchema = new Schema({
   storyOwnerAvatar: { type: String, default: "" },
   senderUsername: { type: String, default: "" },
   senderAvatar: { type: String, default: "" },
+  system: { type: systemSchema, default: null },
   readAt: { type: Date, default: null },
   readBy: { type: [String], default: [] },
   notified: { type: Boolean, default: false },
