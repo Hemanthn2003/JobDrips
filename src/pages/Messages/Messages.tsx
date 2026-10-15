@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Check, CheckCheck, Image as ImageIcon, MoreHorizontal, Paperclip, Search, Send, Users, X } from "lucide-react";
 import { profileService, type Profile as ProfileData } from "../../services/profileService";
@@ -35,6 +35,29 @@ const ago = (value?: string | null) => {
   if (mins < 60) return `${mins}m`;
   if (mins < 1440) return `${Math.floor(mins / 60)}h`;
   return `${Math.floor(mins / 1440)}d`;
+};
+const localDateKey = (date: Date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+const messageDateLabel = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const today = new Date();
+  if (localDateKey(date) === localDateKey(today)) return "Today";
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (localDateKey(date) === localDateKey(yesterday)) return "Yesterday";
+
+  return date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "long",
+    ...(date.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}),
+  });
+};
+const messageTime = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const hour = date.getHours() % 12 || 12;
+  return `${String(hour).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 };
 const initials = (value = "") => value.trim().slice(0, 1).toUpperCase() || "J";
 const isSystem = (m: Pick<ChatMessage, "kind" | "type">) => m.kind === "system" || m.type === "system";
@@ -102,17 +125,17 @@ function Bubble({ m, mine, meId, group, onImage, onPost, onMediaLoad }: { m: Cha
         {hasImage && <img src={m.imageUrl} alt="Shared" onLoad={onMediaLoad} onClick={() => onImage(m.imageUrl!)} className="block h-auto max-h-80 w-72 max-w-full cursor-zoom-in rounded-xl object-cover" />}
         {m.sharedPostId && (
           <button type="button" onClick={() => onPost(m)} className={`block w-full min-w-[14rem] overflow-hidden rounded-xl border text-left ${mine ? "border-white/30 bg-black/10" : "border-[#ead8cc] bg-[#fffaf6] text-[#3c2d26]"}`}>
-            <div className="flex items-center gap-2 p-2">
+            <div className="flex items-center gap-2 bg-white p-2 text-[#332720]">
               <Avatar src={preview?.profileimage} name={preview?.username || "Post owner"} size="h-8 w-8" />
               <span className="truncate text-xs font-bold">{preview?.username || "Shared post"}</span>
             </div>
             {preview?.imageUrl ? <img src={preview.imageUrl} alt="Post" onLoad={onMediaLoad} className="max-h-64 w-full object-cover" /> : <div className="grid h-24 place-items-center text-xs opacity-70"><ImageIcon size={20} /></div>}
-            {preview?.caption && <p className="px-3 py-2 text-xs" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{preview.caption}</p>}
+            {preview?.caption && <p className="bg-white px-3 py-2 text-xs text-[#493c34]" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{preview.caption}</p>}
           </button>
         )}
         {m.text && <p className={`whitespace-pre-wrap break-words text-sm ${hasImage ? "px-3 pb-1 pt-1.5" : m.sharedPostId ? "mt-2" : ""}`}>{m.text}</p>}
         <div className={`mt-1 flex items-center justify-end gap-1 text-[10px] ${hasImage ? "px-2 pb-1" : ""} ${mine ? "text-white/80" : "text-[#9d887b]"}`}>
-          {ago(m.createdAt)} {mine && (seen ? <CheckCheck size={13} /> : <Check size={13} />)}
+          {messageTime(m.createdAt)} {mine && (seen ? <CheckCheck size={13} /> : <Check size={13} />)}
         </div>
       </div>
     </div>
@@ -471,9 +494,22 @@ const Messages = () => {
             <button onClick={() => void clearChat()} className="ml-auto rounded-lg border border-[#e2c7b9] px-3 py-2 text-[#9b4931]">Clear chat for me</button>
           </div>}
           <div ref={listRef} onScroll={onListScroll} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 sm:p-6">
-            {messages.map((m) => isSystem(m)
-              ? <SystemNote key={m.messageId} m={m} meId={me?.userid} />
-              : <Bubble key={m.messageId} m={m} mine={m.senderUserId === me?.userid} meId={me?.userid} group={active.type === "group"} onImage={setLightbox} onPost={(post) => navigate(`/profile/${post.sharedPostOwnerId}/posts/${post.sharedPostId}`)} onMediaLoad={onMediaLoad} />)}
+            {messages.map((m, index) => {
+              const dateLabel = messageDateLabel(m.createdAt);
+              const previousDate = index > 0 ? messageDateLabel(messages[index - 1].createdAt) : "";
+              return (
+                <Fragment key={m.messageId}>
+                  {dateLabel && dateLabel !== previousDate && (
+                    <div className="flex justify-center py-1">
+                      <span className="rounded-full bg-[#f3dfd4] px-5 py-2 text-sm font-bold text-[#814832] shadow-sm ring-1 ring-[#d8b5a2]">{dateLabel}</span>
+                    </div>
+                  )}
+                  {isSystem(m)
+                    ? <SystemNote m={m} meId={me?.userid} />
+                    : <Bubble m={m} mine={m.senderUserId === me?.userid} meId={me?.userid} group={active.type === "group"} onImage={setLightbox} onPost={(post) => navigate(`/profile/${post.sharedPostOwnerId}/posts/${post.sharedPostId}`)} onMediaLoad={onMediaLoad} />}
+                </Fragment>
+              );
+            })}
             {messages.length === 0 && <div className="grid h-full place-items-center text-center text-sm text-[#9b8578]">Say hello 👋</div>}
           </div>
           <div className="shrink-0 border-t border-[#f0e2d9] bg-white/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
