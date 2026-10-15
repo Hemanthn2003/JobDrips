@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Bell } from "lucide-react";
 import { profileService } from "../../services/profileService";
@@ -8,6 +8,7 @@ import {
 } from "../../services/notificationService";
 import type { NotificationItem } from "../../services/notificationService";
 import { PersonAvatar, timeAgoLong } from "../../components/post/postUtils";
+import { useSocketEvent } from "../../lib/socket";
 
 const errText = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
@@ -161,6 +162,7 @@ const Notifications = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");
+  const reloadTimer = useRef<number | undefined>(undefined);
 
   const load = useCallback(async () => {
     setError("");
@@ -170,6 +172,7 @@ const Notifications = () => {
 
       // Opening the page clears the red dot; new ones bring it back.
       await notificationService.markAllRead();
+      setItems((current) => current.map((item) => ({ ...item, read: true })));
       refreshBadges();
     } catch (err: unknown) {
       setError(errText(err, "Unable to load your notifications."));
@@ -181,6 +184,19 @@ const Notifications = () => {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const reloadSoon = useCallback(() => {
+    window.clearTimeout(reloadTimer.current);
+    reloadTimer.current = window.setTimeout(() => {
+      void load();
+    }, 250);
+  }, [load]);
+
+  useEffect(() => () => window.clearTimeout(reloadTimer.current), []);
+  useSocketEvent("notification:new", reloadSoon);
+  useSocketEvent<{ userId?: string }>("notification:read", () => {
+    setItems((current) => current.map((item) => ({ ...item, read: true })));
+  });
 
   const answer = async (item: NotificationItem, accept: boolean) => {
     if (busyId) return;

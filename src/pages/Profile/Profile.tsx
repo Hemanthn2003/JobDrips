@@ -972,9 +972,30 @@ const Profile = () => {
     reloadTimer.current = window.setTimeout(() => { void loadProfile(true); }, 400);
   }, [loadProfile]);
   useEffect(() => () => window.clearTimeout(reloadTimer.current), []);
-  useSocketEvent("story:updated", reloadSoon);
-  useSocketEvent("post:updated", reloadSoon);
-  useSocketEvent("friend:updated", reloadSoon);
+  const viewedProfileId = userid || profile?.userid;
+  useSocketEvent<{ ownerUserId?: string }>("story:updated", (event) => {
+    if (viewedProfileId && event?.ownerUserId === viewedProfileId) reloadSoon();
+  });
+  useSocketEvent<{ ownerId?: string }>("post:updated", (event) => {
+    if (viewedProfileId && event?.ownerId === viewedProfileId) reloadSoon();
+  });
+  useSocketEvent<{ userId?: string; actorId?: string }>("profile:updated", (event) => {
+    if (
+      viewedProfileId &&
+      event?.userId === viewedProfileId &&
+      !ownProfile
+    ) {
+      reloadSoon();
+    }
+  });
+  useSocketEvent<{ userId?: string; otherUserId?: string }>("friend:updated", (event) => {
+    if (
+      viewedProfileId &&
+      (event?.userId === viewedProfileId || event?.otherUserId === viewedProfileId)
+    ) {
+      reloadSoon();
+    }
+  });
  
   // Opening a different member's profile starts at the top of the page.
   useEffect(() => {

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import PostCard from "../../components/post/PostCard";
 import { getPost } from "../../services/postService";
 import type { PostData, PostPerson } from "../../services/postService";
+import { useSocketEvent } from "../../lib/socket";
 
 /**
  * One post shown exactly like the feed card.
@@ -17,6 +18,7 @@ const ViewPost = () => {
   const [viewer, setViewer] = useState<PostPerson | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const reloadTimer = useRef<number | undefined>(undefined);
 
   const load = useCallback(async () => {
     if (!userid || !postId) return;
@@ -37,6 +39,25 @@ const ViewPost = () => {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => () => window.clearTimeout(reloadTimer.current), []);
+  useSocketEvent<{ ownerId?: string; postId?: string; actorId?: string }>(
+    "post:updated",
+    (event) => {
+      if (
+        event?.ownerId !== userid ||
+        event.postId !== postId ||
+        event.actorId === viewer?.userid
+      ) {
+        return;
+      }
+
+      window.clearTimeout(reloadTimer.current);
+      reloadTimer.current = window.setTimeout(() => {
+        void load();
+      }, 300);
+    },
+  );
 
   const goBack = () => {
     if (window.history.length > 1) navigate(-1);

@@ -78,3 +78,17 @@ export const emitFriendChange = (req: Request, res: Response, next: NextFunction
   });
   next();
 };
+
+/** Profile details changed; update the owner and friends viewing that profile. */
+export const emitProfileChange = (req: Request, res: Response, next: NextFunction) => {
+  afterSuccess(res, async () => {
+    const userId = actorOf(req);
+    if (!userId) return;
+    emitAll([userId, ...(await friendsOf(userId))], "profile:updated", {
+      userId,
+      actorId: userId,
+      at: new Date().toISOString(),
+    });
+  });
+  next();
+};

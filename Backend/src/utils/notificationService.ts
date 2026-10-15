@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import Notification, {
   type NotificationType,
 } from "../models/Notification.js";
+import { emitToUser } from "./realtime.js";
 
 export interface NotificationInput {
   type: NotificationType;
@@ -29,7 +30,7 @@ export const createNotification = async (
   }
 
   try {
-    await Notification.create({
+    const notification = await Notification.create({
       notificationId: randomUUID(),
       dedupeKey: input.dedupeKey,
       recipientUserId: input.recipientUserId,
@@ -42,6 +43,10 @@ export const createNotification = async (
       message: input.message,
       mentionIn: input.mentionIn ?? "",
       read: false,
+    });
+    emitToUser(input.recipientUserId, "notification:new", {
+      notificationId: notification.notificationId,
+      type: notification.type,
     });
     return true;
   } catch (error) {

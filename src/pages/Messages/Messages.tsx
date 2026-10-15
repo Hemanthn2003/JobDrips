@@ -150,6 +150,7 @@ const Messages = () => {
   const listRef = useRef<HTMLDivElement | null>(null);
   const pinnedRef = useRef(true); // true while the reader is at (or opening) the bottom of the chat
   const reloadTimer = useRef<number | undefined>(undefined);
+  const refreshProfileAfterReload = useRef(false);
 
   // Refs let the shared socket handlers always see the latest state.
   const activeRef = useRef<ConversationRow | null>(null);
@@ -158,6 +159,20 @@ const Messages = () => {
   const rowCache = useRef(new Map<string, ConversationRow>());
   meRef.current = me;
   conversationsRef.current = conversations;
+
+  const applyConversationList = useCallback((data: { conversations: ConversationRow[]; stories: StoryPerson[] }) => {
+    // Never allow two rows with the same conversationId (React key collisions).
+    setConversations([...new Map(data.conversations.map((c) => [c.conversationId, c])).values()]);
+    setStories(data.stories);
+  }, []);
+
+  const loadConversationList = useCallback(async () => {
+    setError("");
+    try {
+      const result = await api<ApiResult<{ conversations: ConversationRow[]; stories: StoryPerson[] }>>("/api/messages/conversations");
+      applyConversationList(result.data);
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to load messages."); }
+  }, [applyConversationList]);
 
   const loadLanding = useCallback(async () => {
     setError("");
@@ -169,18 +184,22 @@ const Messages = () => {
       const own = profileResponse.data.profile;
       setMe(own);
       setFriends((own.friends || []).filter((f) => f.friendshipAccepted).map((f) => ({ userid: f.userid, username: f.username, profileimage: f.profileimage })));
-      // Never allow two rows with the same conversationId (React key collisions).
-      setConversations([...new Map(listResponse.data.conversations.map((c) => [c.conversationId, c])).values()]);
-      setStories(listResponse.data.stories);
+      applyConversationList(listResponse.data);
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to load messages."); }
     finally { setLoading(false); }
-  }, []);
+  }, [applyConversationList]);
 
-  /** Coalesces bursts of socket events into one reload. */
-  const loadSoon = useCallback(() => {
+  /** Coalesces socket bursts and only reloads profile data for friend changes. */
+  const loadSoon = useCallback((includeProfile = false) => {
+    refreshProfileAfterReload.current ||= includeProfile;
     window.clearTimeout(reloadTimer.current);
-    reloadTimer.current = window.setTimeout(() => { void loadLanding(); }, 300);
-  }, [loadLanding]);
+    reloadTimer.current = window.setTimeout(() => {
+      const shouldReloadProfile = refreshProfileAfterReload.current;
+      refreshProfileAfterReload.current = false;
+      if (shouldReloadProfile) void loadLanding();
+      else void loadConversationList();
+    }, 300);
+  }, [loadConversationList, loadLanding]);
 
   useEffect(() => { void loadLanding(); return () => window.clearTimeout(reloadTimer.current); }, [loadLanding]);
 
@@ -203,7 +222,7 @@ const Messages = () => {
 
   /** Keeps the conversation list (last message, unread badge, order) live without refetching. */
   const applyToList = useCallback((incoming: ChatMessage, viewing: boolean) => {
-    if (!conversationsRef.current.some((c) => c.conversationId === incoming.conversationId)) { void loadLanding(); return; }
+    if (!conversationsRef.current.some((c) => c.conversationId === incoming.conversationId)) { void loadConversationList(); return; }
     const mine = incoming.senderUserId === meRef.current?.userid;
     const system = isSystem(incoming);
     setConversations((old) => {
@@ -212,7 +231,7 @@ const Messages = () => {
       const updated = { ...row, lastMessage: previewOf(incoming), lastMessageAt: incoming.createdAt, unreadCount: viewing || mine ? 0 : system ? row.unreadCount : row.unreadCount + 1 };
       return [updated, ...old.filter((c) => c.conversationId !== incoming.conversationId)];
     });
-  }, [loadLanding]);
+  }, [loadConversationList]);
 
   const loadChat = useCallback(async (row: ConversationRow) => {
     activeRef.current = row;
@@ -286,9 +305,12 @@ const Messages = () => {
       ? { ...message, readAt: event.readAt, readBy: [...new Set([...(message.readBy || []), event.readBy])] }
       : message));
   });
-  useSocketEvent("conversation:updated", loadSoon);
-  useSocketEvent("story:updated", loadSoon);
-  useSocketEvent("friend:updated", loadSoon);
+  useSocketEvent("conversation:updated", () => loadSoon());
+  useSocketEvent("story:updated", () => loadSoon());
+  useSocketEvent("friend:updated", () => loadSoon(true));
+  useSocketEvent<{ userId?: string; actorId?: string }>("profile:updated", (event) => {
+    if (event?.userId && event.userId !== meRef.current?.userid) loadSoon(true);
+  });
 
   const clearPending = () => {
     setPending((old) => { if (old) URL.revokeObjectURL(old.preview); return null; });
@@ -327,7 +349,7 @@ const Messages = () => {
       const result = await api<ApiResult<{ conversationId: string }>>("/api/messages/groups", { method: "POST", body: JSON.stringify({ title: groupTitle, memberIds: selectedFriends }) });
       const title = groupTitle;
       setShowCreate(false); setGroupTitle(""); setSelectedFriends([]);
-      await loadLanding();
+      await loadConversationList();
       openChat({ conversationId: result.data.conversationId, type: "group", title, lastMessage: "", unreadCount: 0 });
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to create group."); }
   };
@@ -353,7 +375,7 @@ const Messages = () => {
     try {
       await api(`/api/messages/${encodeURIComponent(active.conversationId)}/clear`, { method: "DELETE" });
       setMessages([]); setShowOptions(false);
-      await loadLanding();
+      await loadConversationList();
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to clear chat."); }
   };
 
@@ -473,8 +495,8 @@ const Messages = () => {
           meId={me.userid}
           friends={friends}
           onClose={() => setShowGroupInfo(false)}
-          onChanged={loadSoon}
-          onLeft={() => { setShowGroupInfo(false); closeConversation(); void loadLanding(); }}
+          onChanged={() => loadSoon()}
+          onLeft={() => { setShowGroupInfo(false); closeConversation(); void loadConversationList(); }}
         />
       )}
 

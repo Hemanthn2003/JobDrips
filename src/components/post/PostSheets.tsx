@@ -17,6 +17,7 @@ import type {
 } from "../../services/postService";
 import MentionField from "./MentionField";
 import { PersonAvatar, getPostImages } from "./postUtils";
+import { useSocketEvent } from "../../lib/socket";
 
 const errText = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
@@ -305,12 +306,24 @@ export function MessageSheet({
     }
   }, [recipient.userid]);
 
-  // Load the history, then quietly check for new messages from them.
   useEffect(() => {
     void loadHistory();
-    const timer = window.setInterval(() => void loadHistory(), 6000);
-    return () => window.clearInterval(timer);
   }, [loadHistory]);
+
+  useSocketEvent<ChatMessage>("message:new", (incoming) => {
+    if (
+      incoming.senderUserId !== recipient.userid &&
+      incoming.recipientUserId !== recipient.userid
+    ) {
+      return;
+    }
+
+    setMessages((previous) =>
+      previous.some((message) => message.messageId === incoming.messageId)
+        ? previous
+        : [...previous, incoming],
+    );
+  });
 
   // Keep the page behind the sheet still while it is open, and close on Esc.
   const closeRef = useRef(onClose);
@@ -354,16 +367,20 @@ export function MessageSheet({
     setError("");
 
     try {
-      await sendMessage({
+      const sentMessage = await sendMessage({
         recipientUserId: recipient.userid,
         text: message,
         sharedPostId: attached?.postId,
         sharedPostOwnerId: attached?.userid,
       });
+      setMessages((previous) =>
+        previous.some((item) => item.messageId === sentMessage.messageId)
+          ? previous
+          : [...previous, sentMessage],
+      );
       setText("");
       setAttached(undefined);
       stickToBottom.current = true;
-      await loadHistory();
     } catch (err: unknown) {
       setError(errText(err, "Unable to send your message."));
     } finally {

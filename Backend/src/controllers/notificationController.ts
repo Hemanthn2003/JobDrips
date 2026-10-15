@@ -5,6 +5,7 @@ import Notification from "../models/Notification.js";
 import Profile from "../models/Profile.js";
 import type { AuthenticatedRequest } from "../utils/authMiddleware.js";
 import { loadPeople, type RawPost } from "../utils/postHelpers.js";
+import { emitToUser } from "../utils/realtime.js";
 
 const viewerIdOf = (request: Request): string =>
   String((request as AuthenticatedRequest).userId || "");
@@ -198,10 +199,13 @@ export const markAllRead = async (request: Request, response: Response) => {
     const viewerId = viewerIdOf(request);
     if (!viewerId) return sendUnauthorized(response);
 
-    await Notification.updateMany(
+    const result = await Notification.updateMany(
       { recipientUserId: viewerId, read: false },
       { $set: { read: true } },
     );
+    if (result.modifiedCount > 0) {
+      emitToUser(viewerId, "notification:read", { userId: viewerId });
+    }
 
     response.json({ success: true });
   } catch (error) {

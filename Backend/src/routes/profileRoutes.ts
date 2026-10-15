@@ -25,25 +25,29 @@ import {
 
 import { removeFriend } from "../controllers/friendController.js";
 import { authenticate } from "../utils/authMiddleware.js";
-import { emitFriendChange, emitStoryChange } from "../utils/liveEvents.js";
+import {
+  emitFriendChange,
+  emitProfileChange,
+  emitStoryChange,
+} from "../utils/liveEvents.js";
 
 const router = Router();
 
 // Current user's profile
 router.get("/me", authenticate, getMyProfile);
-router.patch("/me", authenticate, updateMyProfile);
-router.patch("/me/image", authenticate, updateProfileImage);
+router.patch("/me", authenticate, emitProfileChange, updateMyProfile);
+router.patch("/me/image", authenticate, emitProfileChange, updateProfileImage);
 
 // Username availability (must stay above "/:userid")
 router.get("/username-availability", authenticate, checkUsernameAvailability);
 
 // Education
-router.post("/me/education", authenticate, addEducation);
-router.delete("/me/education/:id", authenticate, deleteEducation);
+router.post("/me/education", authenticate, emitProfileChange, addEducation);
+router.delete("/me/education/:id", authenticate, emitProfileChange, deleteEducation);
 
 // Experience
-router.post("/me/experience", authenticate, addExperience);
-router.delete("/me/experience/:id", authenticate, deleteExperience);
+router.post("/me/experience", authenticate, emitProfileChange, addExperience);
+router.delete("/me/experience/:id", authenticate, emitProfileChange, deleteExperience);
 
 // Friend requests (live: both people + notification badge update instantly)
 router.post("/requests/:requesterId/accept", authenticate, emitFriendChange, acceptFriendRequest);

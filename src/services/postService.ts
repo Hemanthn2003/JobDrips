@@ -318,8 +318,12 @@ export async function sendMessage(input: {
   text: string;
   sharedPostId?: string;
   sharedPostOwnerId?: string;
-}) {
-  await request<{ success: boolean }>("/api/messages/send", json(input));
+}): Promise<ChatMessage> {
+  const result = await request<ApiResult<{ message: ChatMessage }>>(
+    "/api/messages/send",
+    json(input),
+  );
+  return result.data.message;
 }
 
 export interface ChatMessage {
@@ -327,9 +331,11 @@ export interface ChatMessage {
   senderUserId: string;
   recipientUserId: string;
   text: string;
-  kind: "text" | "post_share" | "mention";
+  kind: "text" | "post_share" | "mention" | "story_reply" | "image" | "system";
   sharedPostId: string | null;
   sharedPostOwnerId: string | null;
+  conversationId?: string;
+  imageUrl?: string;
   createdAt: string;
 }
 

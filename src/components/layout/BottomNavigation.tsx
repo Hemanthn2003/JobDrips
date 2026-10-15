@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { NavLink } from "react-router-dom";
 import {
   NOTIFICATION_REFRESH_EVENT,
   notificationService,
 } from "../../services/notificationService";
 import type { NotificationSummary } from "../../services/notificationService";
+import { useLiveBadges } from "../../lib/useLiveBadges";
 
 interface NavigationItemProps {
   to: string;
@@ -137,39 +138,54 @@ const NavigationItem = ({
   );
 };
 
-const BADGE_POLL_MS = 20000;
-
 const BottomNavigation = () => {
-  const location = useLocation();
+  const summaryRequest = useRef<Promise<NotificationSummary> | null>(null);
+  const refreshTimer = useRef<number | undefined>(undefined);
   const [summary, setSummary] = useState<NotificationSummary>({
     unreadNotifications: 0,
     unseenMessagePeople: 0,
   });
 
+  useLiveBadges();
+
   const loadSummary = useCallback(async () => {
+    if (summaryRequest.current) {
+      try {
+        setSummary(await summaryRequest.current);
+      } catch {
+        // Signed out or offline: keep the last known badges.
+      }
+      return;
+    }
+
+    const request = notificationService.getSummary();
+    summaryRequest.current = request;
     try {
-      setSummary(await notificationService.getSummary());
+      setSummary(await request);
     } catch {
       // Signed out or offline: keep the last known badges.
+    } finally {
+      if (summaryRequest.current === request) summaryRequest.current = null;
     }
   }, []);
 
-  // Reload on every page change, on a timer, and when a page asks for it.
   useEffect(() => {
     void loadSummary();
-  }, [loadSummary, location.pathname]);
+  }, [loadSummary]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => void loadSummary(), BADGE_POLL_MS);
-    const onRefresh = () => void loadSummary();
+    const onRefresh = () => {
+      window.clearTimeout(refreshTimer.current);
+      refreshTimer.current = window.setTimeout(() => {
+        void loadSummary();
+      }, 200);
+    };
 
     window.addEventListener(NOTIFICATION_REFRESH_EVENT, onRefresh);
-    window.addEventListener("focus", onRefresh);
 
     return () => {
-      window.clearInterval(timer);
+      window.clearTimeout(refreshTimer.current);
       window.removeEventListener(NOTIFICATION_REFRESH_EVENT, onRefresh);
-      window.removeEventListener("focus", onRefresh);
     };
   }, [loadSummary]);
 
