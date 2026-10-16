@@ -66,7 +66,11 @@ export const getSummary = async (request: Request, response: Response) => {
     if (!viewerId) return sendUnauthorized(response);
 
     const [unreadNotifications, unseenMessagePeople] = await Promise.all([
-      Notification.countDocuments({ recipientUserId: viewerId, read: false }),
+      Notification.countDocuments({
+        recipientUserId: viewerId,
+        read: false,
+        hidden: { $ne: true },
+      }),
       countUnseenMessagePeople(viewerId),
     ]);
 
@@ -80,7 +84,7 @@ export const getSummary = async (request: Request, response: Response) => {
 };
 
 // --------------------------------------------------
-// LIST
+// LIST (deleted ones are never returned)
 // GET /api/notifications
 // --------------------------------------------------
 
@@ -92,7 +96,10 @@ export const listNotifications = async (
     const viewerId = viewerIdOf(request);
     if (!viewerId) return sendUnauthorized(response);
 
-    const items = (await Notification.find({ recipientUserId: viewerId })
+    const items = (await Notification.find({
+      recipientUserId: viewerId,
+      hidden: { $ne: true },
+    })
       .sort({ createdAt: -1 })
       .limit(100)
       .lean()) as unknown as NotificationRow[];
@@ -153,9 +160,7 @@ export const listNotifications = async (
       }),
     );
 
-    const data = (
-      items
-    ).map((item) => {
+    const data = items.map((item) => {
       const actor = people.get(item.actorUserId);
 
       return {
@@ -210,5 +215,34 @@ export const markAllRead = async (request: Request, response: Response) => {
     response.json({ success: true });
   } catch (error) {
     sendServerError(response, "Mark notifications read", error);
+  }
+};
+
+// --------------------------------------------------
+// DELETE THE WHOLE LIST (the dustbin icon)
+// POST /api/notifications/clear-all
+// Only hides this person's notifications. Anything that arrives afterwards
+// is a new record, so it shows up normally.
+// --------------------------------------------------
+
+export const clearAllNotifications = async (
+  request: Request,
+  response: Response,
+) => {
+  try {
+    const viewerId = viewerIdOf(request);
+    if (!viewerId) return sendUnauthorized(response);
+
+    await Notification.updateMany(
+      { recipientUserId: viewerId, hidden: { $ne: true } },
+      { $set: { hidden: true, read: true } },
+    );
+
+    // Lets the bottom navigation badge update right away.
+    emitToUser(viewerId, "notification:read", { userId: viewerId });
+
+    response.json({ success: true });
+  } catch (error) {
+    sendServerError(response, "Clear notifications", error);
   }
 };

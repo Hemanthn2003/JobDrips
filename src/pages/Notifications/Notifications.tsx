@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Bell } from "lucide-react";
+import { Bell, Trash2 } from "lucide-react";
 import { profileService } from "../../services/profileService";
 import {
   notificationService,
@@ -8,6 +8,7 @@ import {
 } from "../../services/notificationService";
 import type { NotificationItem } from "../../services/notificationService";
 import { PersonAvatar, timeAgoLong } from "../../components/post/postUtils";
+import { useConfirm } from "../../components/common/ConfirmModal";
 import { useSocketEvent } from "../../lib/socket";
 
 const errText = (error: unknown, fallback: string) =>
@@ -158,16 +159,20 @@ function Row({
 }
 
 const Notifications = () => {
+  const { confirm, dialog } = useConfirm();
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");
+  const [clearing, setClearing] = useState(false);
   const reloadTimer = useRef<number | undefined>(undefined);
 
   const load = useCallback(async () => {
     setError("");
 
     try {
+      // The server only returns notifications that were not deleted,
+      // so after a delete only brand new ones appear here.
       setItems(await notificationService.list());
 
       // Opening the page clears the red dot; new ones bring it back.
@@ -220,9 +225,49 @@ const Notifications = () => {
     }
   };
 
+  const clearAll = async () => {
+    if (clearing || items.length === 0) return;
+
+    const ok = await confirm({
+      title: "Delete all notifications?",
+      message: "Your notification list will be cleared. Only new notifications will show up from now on.",
+      confirmText: "Delete all",
+      tone: "danger",
+    });
+    if (!ok) return;
+
+    setClearing(true);
+    setError("");
+
+    try {
+      await notificationService.clearAll();
+      setItems([]);
+      refreshBadges();
+    } catch (err: unknown) {
+      setError(errText(err, "Unable to delete your notifications."));
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <div className="mx-auto w-full max-w-[640px] pb-6">
-      <h1 className="mb-4 text-xl font-black text-[#332720]">Notifications</h1>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h1 className="text-xl font-black text-[#332720]">Notifications</h1>
+
+        {!loading && items.length > 0 && (
+          <button
+            type="button"
+            onClick={() => void clearAll()}
+            disabled={clearing}
+            aria-label="Delete all notifications"
+            title="Delete all"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-[#eee4dd] bg-white text-[#8b7a70] transition hover:bg-[#fdeeea] hover:text-[#b4432f] disabled:opacity-50"
+          >
+            <Trash2 size={19} />
+          </button>
+        )}
+      </div>
 
       {error && (
         <p role="alert" className="mb-3 rounded-xl bg-[#fdeeea] px-4 py-3 text-sm text-[#b4432f]">
@@ -263,6 +308,8 @@ const Notifications = () => {
           ))}
         </ul>
       )}
+
+      {dialog}
     </div>
   );
 };

@@ -91,6 +91,13 @@ export const notificationService = {
       method: "POST",
     });
   },
+
+  /** Deletes the whole list for this person (new ones still arrive later). */
+  async clearAll(): Promise<void> {
+    await request<{ success: boolean }>("/api/notifications/clear-all", {
+      method: "POST",
+    });
+  },
 };
 
 /** Tells the bottom navigation to reload its badges right away. */

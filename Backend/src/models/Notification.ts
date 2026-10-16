@@ -37,12 +37,19 @@ const notificationSchema = new Schema(
 
     // Unread until the person opens the notifications page.
     read: { type: Boolean, default: false },
+
+    // true = the person deleted it from their list. The record stays in the
+    // database (so the same event can never notify them again) but it is
+    // never listed or counted.
+    hidden: { type: Boolean, default: false },
+
     createdAt: { type: Date, default: Date.now },
   },
   { timestamps: true, versionKey: false },
 );
 
 notificationSchema.index({ recipientUserId: 1, read: 1, createdAt: -1 });
+notificationSchema.index({ recipientUserId: 1, hidden: 1, createdAt: -1 });
 
 const Notification =
   (mongoose.models.Notification as mongoose.Model<any>) ||
