@@ -1,9 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Image as ImageIcon, RefreshCw } from "lucide-react";
+import { ArrowUp, Image as ImageIcon, RefreshCw, Sparkles } from "lucide-react";
 import PostCard from "../../components/post/PostCard";
 import { getFeed } from "../../services/postService";
 import type { PostData, PostPerson } from "../../services/postService";
 import { useSocketEvent } from "../../lib/socket";
+
+/** The server adds where a post came from. */
+type FeedPost = PostData & {
+  source?: "own" | "friend" | "suggested";
+  reason?: "similar" | "friends_liked";
+};
+
+interface PendingFeed {
+  posts: FeedPost[];
+  viewer: PostPerson;
+  freshCount: number;
+}
+
+/** Background refresh: when the tab is visible, at most this often. */
+const REFRESH_MIN_GAP_MS = 20_000;
+const REFRESH_EVERY_MS = 60_000;
+/** Scrolled further than this = don't move the page, show the "new posts" button. */
+const SCROLLED_DOWN_PX = 300;
 
 /** Small stable fingerprint, so only posts that really changed are re-rendered fresh. */
 const fingerprint = (post: PostData): number => {
@@ -15,14 +33,21 @@ const fingerprint = (post: PostData): number => {
   return hash;
 };
 
+const idOf = (post: PostData) => `${post.userid}-${post.postId}`;
+const timeOf = (post: PostData) => new Date(post.createdAt || 0).getTime();
+
 const Feed = () => {
-  const [posts, setPosts] = useState<PostData[]>([]);
+  const [posts, setPosts] = useState<FeedPost[]>([]);
   const [viewer, setViewer] = useState<PostPerson | null>(null);
+  const [pending, setPending] = useState<PendingFeed | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const reloadTimer = useRef<number | undefined>(undefined);
+  const lastLoad = useRef(0);
   const viewerRef = useRef<PostPerson | null>(null);
+  const postsRef = useRef<FeedPost[]>([]);
   viewerRef.current = viewer;
+  postsRef.current = posts;
 
   // silent = refresh in the background (no skeleton, errors ignored).
   const loadFeed = useCallback(async (silent = false) => {
@@ -33,7 +58,27 @@ const Feed = () => {
 
     try {
       const result = await getFeed();
-      setPosts(result.posts);
+      const incoming = result.posts as FeedPost[];
+      lastLoad.current = Date.now();
+
+      if (silent) {
+        // Posts that are newer than everything on screen.
+        const current = postsRef.current;
+        const known = new Set(current.map(idOf));
+        const newest = current.reduce((max, post) => Math.max(max, timeOf(post)), 0);
+        const fresh = incoming.filter(
+          (post) => !known.has(idOf(post)) && timeOf(post) > newest,
+        );
+
+        // Reading further down: don't move the page, offer a button instead.
+        if (fresh.length > 0 && window.scrollY > SCROLLED_DOWN_PX) {
+          setPending({ posts: incoming, viewer: result.viewer, freshCount: fresh.length });
+          return;
+        }
+      }
+
+      setPending(null);
+      setPosts(incoming);
       setViewer(result.viewer);
     } catch (err) {
       if (!silent) {
@@ -54,6 +99,25 @@ const Feed = () => {
 
   useEffect(() => () => window.clearTimeout(reloadTimer.current), []);
 
+  // Coming back to the tab (or leaving the feed open) picks up new posts.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastLoad.current < REFRESH_MIN_GAP_MS) return;
+      void loadFeed(true);
+    };
+
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    const timer = window.setInterval(refresh, REFRESH_EVERY_MS);
+
+    return () => {
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
+    };
+  }, [loadFeed]);
+
   // Live updates: another person liked, commented, saved, shared, edited,
   // archived or deleted a post (or published a new one).
   useSocketEvent<{ actorId?: string }>("post:updated", (payload) => {
@@ -67,19 +131,40 @@ const Feed = () => {
     }, 400);
   });
 
+  const showPending = () => {
+    if (!pending) return;
+    setPosts(pending.posts);
+    setViewer(pending.viewer);
+    setPending(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   const removePost = useCallback((postId: string) => {
     setPosts((previous) => previous.filter((post) => post.postId !== postId));
   }, []);
 
   return (
-    <main className="min-h-screen bg-[#faf8f6] pb-8 text-[#332720]">
-      <div className="mx-auto w-full max-w-[1120px] px-4 py-5 sm:px-6 lg:px-8">
+    <main className="min-h-screen w-full bg-[#faf8f6] pb-8 text-[#332720]">
+      {pending && (
+        <button
+          type="button"
+          onClick={showPending}
+          className="fixed left-1/2 top-20 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full bg-gradient-to-r from-[#CB8969] to-[#994D35] px-5 py-2.5 text-sm font-bold text-white shadow-lg transition hover:opacity-95 active:scale-95"
+        >
+          <ArrowUp size={16} />
+          {pending.freshCount} new {pending.freshCount === 1 ? "post" : "posts"}
+        </button>
+      )}
+
+      {/* Mobile: no side padding, cards touch both screen edges.
+          Larger screens: normal side padding. */}
+      <div className="w-full px-0 py-3 sm:px-6 sm:py-5 lg:px-8">
         {loading && (
-          <div className="mx-auto max-w-[900px] space-y-5 lg:pr-[290px]">
+          <div className="w-full space-y-3 sm:space-y-5">
             {[1, 2].map((item) => (
               <div
                 key={item}
-                className="overflow-hidden rounded-2xl border border-[#eee4dd] bg-white shadow-sm"
+                className="w-full overflow-hidden border-y border-[#eee4dd] bg-white sm:rounded-2xl sm:border"
               >
                 <div className="flex animate-pulse items-center gap-3 p-4">
                   <div className="h-11 w-11 rounded-full bg-[#eee6e0]" />
@@ -99,7 +184,7 @@ const Feed = () => {
         )}
 
         {!loading && error && (
-          <section className="mx-auto max-w-[900px] rounded-2xl border border-[#efdbd4] bg-white px-6 py-12 text-center shadow-sm">
+          <section className="mx-auto w-full max-w-xl rounded-2xl border border-[#efdbd4] bg-white px-6 py-12 text-center shadow-sm">
             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[#f8eae5] text-[#a05b47]">
               <RefreshCw size={23} />
             </div>
@@ -118,63 +203,43 @@ const Feed = () => {
         )}
 
         {!loading && !error && posts.length === 0 && (
-          <section className="mx-auto max-w-[900px] rounded-2xl border border-[#eee4dd] bg-white px-6 py-14 text-center shadow-sm">
+          <section className="mx-auto w-full max-w-xl rounded-2xl border border-[#eee4dd] bg-white px-6 py-14 text-center shadow-sm">
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-[#f3eae4] text-[#795b4b]">
               <ImageIcon size={26} />
             </div>
             <h2 className="text-lg font-bold">Your feed is just getting started</h2>
             <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[#8b7a70]">
-              Posts from your connections will appear here as your community
-              grows.
+              Posts from you, your connections and people with similar
+              interests will appear here as your community grows.
             </p>
           </section>
         )}
 
         {!loading && !error && posts.length > 0 && viewer && (
-          <div className="mx-auto grid max-w-[900px] grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_270px] lg:items-start">
-            <section className="min-w-0 space-y-5">
-              {posts.map((post) => (
+          <section className="w-full min-w-0 space-y-3 sm:space-y-5">
+            {posts.map((post) => (
+              <div
+                // The fingerprint changes only when this post's data changed,
+                // so a live update refreshes just that card.
+                key={`${post.userid}-${post.postId}-${fingerprint(post)}`}
+                className="w-full"
+              >
+                {post.source === "suggested" && (
+                  <p className="mb-2 flex items-center gap-1.5 px-4 text-xs font-bold text-[#a17b6c] sm:px-1">
+                    <Sparkles size={13} />
+                    {post.reason === "friends_liked"
+                      ? "Suggested for you · liked by your friends"
+                      : "Suggested for you"}
+                  </p>
+                )}
                 <PostCard
-                  // The fingerprint changes only when this post's data changed,
-                  // so a live update refreshes just that card.
-                  key={`${post.userid}-${post.postId}-${fingerprint(post)}`}
                   initialPost={post}
                   viewer={viewer}
                   onRemoved={removePost}
                 />
-              ))}
-            </section>
-
-            <aside className="hidden space-y-4 lg:block">
-              <section className="rounded-2xl border border-[#eee4dd] bg-white p-5 shadow-sm">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#a17b6c]">
-                  JobDrips
-                </p>
-                <h2 className="mt-2 text-lg font-bold text-[#332720]">
-                  Grow together.
-                </h2>
-                <p className="mt-2 text-sm leading-6 text-[#8b7a70]">
-                  Share what you are learning, discover new ideas, and connect
-                  with people building their future.
-                </p>
-              </section>
-
-              <section className="rounded-2xl border border-[#eee4dd] bg-white p-5 shadow-sm">
-                <h2 className="text-sm font-bold text-[#49352b]">
-                  Feed guidelines
-                </h2>
-                <ul className="mt-3 space-y-2.5 text-xs leading-5 text-[#8b7a70]">
-                  <li>• Share useful ideas and projects.</li>
-                  <li>• Give constructive feedback.</li>
-                  <li>• Celebrate other people's progress.</li>
-                </ul>
-              </section>
-
-              <p className="px-1 text-[11px] leading-5 text-[#aa9b90]">
-                © {new Date().getFullYear()} JobDrips. All rights reserved.
-              </p>
-            </aside>
-          </div>
+              </div>
+            ))}
+          </section>
         )}
       </div>
     </main>

@@ -154,13 +154,16 @@ const saveSchema = new Schema(
 );
 
 // -------------------- POST DISPLAY SETTINGS --------------------
+// The three counts are hidden by default; the owner turns them on with
+// "Show like / share / save count". Comments are on by default.
+// Likes, shares, saves and comments are always stored, whatever these say.
 
 const postSettingsSchema = new Schema(
   {
-    hideLikeCount: { type: Boolean, default: false },
+    hideLikeCount: { type: Boolean, default: true },
     hideComments: { type: Boolean, default: false },
-    hideShareCount: { type: Boolean, default: false },
-    hideSaveCount: { type: Boolean, default: false },
+    hideShareCount: { type: Boolean, default: true },
+    hideSaveCount: { type: Boolean, default: true },
   },
   { _id: false },
 );

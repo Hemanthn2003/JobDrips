@@ -70,6 +70,19 @@ const param = (request: Request, key: string): string => {
   return typeof value === "string" ? value : "";
 };
 
+/**
+ * When the owner turns comments off, nobody can see, add, edit, like or delete
+ * comments on that post. The saved comments stay in the database and come back
+ * if the owner turns comments on again.
+ */
+const commentsAreOff = (context: PostContext, response: Response): boolean => {
+  if (context.post.settings?.hideComments) {
+    sendError(response, 403, "Comments are turned off for this post.");
+    return true;
+  }
+  return false;
+};
+
 const loadRawPost = async (
   ownerId: string,
   postId: string,
@@ -307,10 +320,15 @@ export const getPost = async (request: Request, response: Response) => {
 
     const { viewerId, owner, post, viewer } = context;
 
+    // Comments turned off: the saved comments are not sent to anyone.
+    const commentsOff = Boolean(post.settings?.hideComments);
+
     const [author, viewerPerson, people] = await Promise.all([
       loadPerson(owner.userid, owner),
       loadPerson(viewerId, viewer),
-      loadPeople((post.comments ?? []).map((comment) => comment.userId)),
+      loadPeople(
+        commentsOff ? [] : (post.comments ?? []).map((comment) => comment.userId),
+      ),
     ]);
 
     response.json({
@@ -320,7 +338,7 @@ export const getPost = async (request: Request, response: Response) => {
           viewerId,
           author,
           people,
-          includeComments: true,
+          includeComments: !commentsOff,
         }),
         viewer: viewerPerson,
       },
@@ -548,12 +566,9 @@ export const addComment = async (request: Request, response: Response) => {
     const context = await loadPostContext(request, response);
     if (!context) return;
 
-    const { viewerId, viewer, owner, post } = context;
+    if (commentsAreOff(context, response)) return;
 
-    if (post.settings?.hideComments) {
-      sendError(response, 403, "Comments are turned off for this post.");
-      return;
-    }
+    const { viewerId, viewer, owner, post } = context;
 
     const body = bodyOf(request);
     const text = typeof body.commentText === "string" ? body.commentText.trim() : "";
@@ -672,6 +687,8 @@ export const editComment = async (request: Request, response: Response) => {
     const context = await loadPostContext(request, response);
     if (!context) return;
 
+    if (commentsAreOff(context, response)) return;
+
     const { viewerId, viewer, owner, post } = context;
     const commentId = param(request, "commentId");
 
@@ -755,6 +772,8 @@ export const deleteComment = async (request: Request, response: Response) => {
     const context = await loadPostContext(request, response);
     if (!context) return;
 
+    if (commentsAreOff(context, response)) return;
+
     const { viewerId, isOwner, owner, post } = context;
     const commentId = param(request, "commentId");
 
@@ -805,6 +824,8 @@ export const setCommentLike = async (request: Request, response: Response) => {
     const context = await loadPostContext(request, response);
     if (!context) return;
 
+    if (commentsAreOff(context, response)) return;
+
     const liked = bodyOf(request).liked;
 
     if (typeof liked !== "boolean") {
@@ -848,6 +869,8 @@ export const setCommentLike = async (request: Request, response: Response) => {
 // EDIT A POST (owner only)
 // PATCH /api/posts/:ownerId/:postId
 // Body: { caption?, hashtags?, settings? }
+// Only the display settings change; likes, saves, shares and comments are
+// never touched, so turning an option back on shows the saved data again.
 // --------------------------------------------------
 
 export const updatePost = async (request: Request, response: Response) => {
@@ -911,7 +934,11 @@ export const updatePost = async (request: Request, response: Response) => {
     }
 
     if (body.settings !== undefined) {
-      if (!body.settings || typeof body.settings !== "object") {
+      if (
+        !body.settings ||
+        typeof body.settings !== "object" ||
+        Array.isArray(body.settings)
+      ) {
         sendError(response, 400, "settings must be an object.");
         return;
       }

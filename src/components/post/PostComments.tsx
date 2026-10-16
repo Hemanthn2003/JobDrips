@@ -11,6 +11,7 @@ import type {
   PostData,
   PostPerson,
 } from "../../services/postService";
+import { useConfirm } from "../common/ConfirmModal";
 import MentionField from "./MentionField";
 import { PersonAvatar, RichText, timeAgoLong } from "./postUtils";
 
@@ -32,6 +33,7 @@ const iconButton =
   "flex h-7 items-center gap-1 rounded-full px-1.5 text-[11px] font-semibold text-[#9a897e] transition hover:bg-[#f5ece6] hover:text-[#654536] disabled:opacity-50";
 
 export default function PostComments({ post, viewer, onPostChange, onClose }: Props) {
+  const { confirm, dialog } = useConfirm();
   const [draft, setDraft] = useState("");
   const [replyTo, setReplyTo] = useState<{ commentId: string; username: string } | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
@@ -44,6 +46,8 @@ export default function PostComments({ post, viewer, onPostChange, onClose }: Pr
   const listRef = useRef<HTMLDivElement | null>(null);
   const scrollToId = useRef<string>("");
   const opened = useRef(false);
+  // True while the delete confirmation is open, so Esc only closes that.
+  const confirming = useRef(false);
 
   // Oldest comments first (top), newest last (bottom).
   const comments = [...(post.comments ?? [])].sort(byOldestFirst);
@@ -63,7 +67,7 @@ export default function PostComments({ post, viewer, onPostChange, onClose }: Pr
     document.body.style.overflow = "hidden";
 
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeRef.current();
+      if (event.key === "Escape" && !confirming.current) closeRef.current();
     };
     window.addEventListener("keydown", onKey);
 
@@ -192,7 +196,17 @@ export default function PostComments({ post, viewer, onPostChange, onClose }: Pr
   };
 
   const remove = async (comment: PostComment) => {
-    if (busyId || !window.confirm("Delete this comment?")) return;
+    if (busyId) return;
+
+    confirming.current = true;
+    const ok = await confirm({
+      title: "Delete this comment?",
+      message: "Replies to this comment will be deleted with it.",
+      confirmText: "Delete",
+      tone: "danger",
+    });
+    confirming.current = false;
+    if (!ok) return;
 
     setBusyId(comment.commentId);
     setError("");
@@ -436,6 +450,8 @@ export default function PostComments({ post, viewer, onPostChange, onClose }: Pr
           </div>
         </div>
       </section>
+
+      {dialog}
     </div>
   );
 }

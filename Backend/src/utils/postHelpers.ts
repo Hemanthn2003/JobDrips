@@ -243,11 +243,16 @@ interface SerializeContext {
   includeComments?: boolean;
 }
 
+/**
+ * The three counts are hidden unless the owner ticked "Show ... count"
+ * (hide... = false). A post that has no saved value yet counts as hidden.
+ * Comments are shown unless the owner turned them off.
+ */
 export const normalizeSettings = (settings: RawPost["settings"]) => ({
-  hideLikeCount: Boolean(settings?.hideLikeCount),
+  hideLikeCount: settings?.hideLikeCount ?? true,
   hideComments: Boolean(settings?.hideComments),
-  hideShareCount: Boolean(settings?.hideShareCount),
-  hideSaveCount: Boolean(settings?.hideSaveCount),
+  hideShareCount: settings?.hideShareCount ?? true,
+  hideSaveCount: settings?.hideSaveCount ?? true,
 });
 
 export const serializeComment = (
@@ -281,6 +286,10 @@ export const serializePost = (post: RawPost, context: SerializeContext) => {
     (comment) => comment.visible !== false,
   );
 
+  // Comments turned off: the saved comments stay in the database,
+  // but they are never sent to anyone.
+  const commentsOff = Boolean(post.settings?.hideComments);
+
   return {
     postId: post.postId,
     userid: post.userid,
@@ -301,9 +310,11 @@ export const serializePost = (post: RawPost, context: SerializeContext) => {
     shareCount: (post.shares ?? []).length,
     liked: (post.likes ?? []).some((like) => like.userId === viewerId),
     saved: (post.saves ?? []).some((save) => save.userId === viewerId),
+    // True when this viewer has already sent the post to friends.
+    shared: (post.shares ?? []).some((share) => share.fromUserId === viewerId),
     isOwner: post.userid === viewerId,
     ...(context.author ? { author: context.author } : {}),
-    ...(context.includeComments
+    ...(context.includeComments && !commentsOff
       ? {
           comments: visibleComments.map((comment) =>
             serializeComment(comment, viewerId, context.people),

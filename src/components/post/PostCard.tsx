@@ -21,6 +21,7 @@ import {
   setSave,
 } from "../../services/postService";
 import type { PostData, PostPerson } from "../../services/postService";
+import { useConfirm } from "../common/ConfirmModal";
 import PostComments from "./PostComments";
 import { EditPostSheet, MessageSheet, ReportSheet, ShareSheet } from "./PostSheets";
 import { MEDAL_ACTIVE_ICON, MEDAL_ICON } from "./postAssets";
@@ -64,7 +65,9 @@ function ActionButton({
       onClick={onClick}
       aria-label={label}
       aria-pressed={active}
-      className="flex min-w-[48px] flex-col items-center gap-0.5 rounded-xl px-2 py-1.5 transition hover:bg-[#f8efeb]"
+      className={`flex min-w-[48px] flex-col items-center gap-0.5 rounded-xl px-2 py-1.5 transition hover:bg-[#f8efeb] ${
+        active ? "bg-[#fbf3ee]" : ""
+      }`}
     >
       {children}
       <span className="h-4 text-[11px] font-semibold leading-4 text-[#7b675b]">
@@ -82,7 +85,12 @@ export default function PostCard({
   unarchiveLabel,
 }: Props) {
   const navigate = useNavigate();
+  const { confirm, dialog } = useConfirm();
   const [post, setPost] = useState(initialPost);
+  // True when this person has sent the post to friends (the server sends it too).
+  const [shared, setShared] = useState(
+    Boolean((initialPost as { shared?: boolean }).shared),
+  );
   const [imageIndex, setImageIndex] = useState(0);
   const [showComments, setShowComments] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -105,11 +113,20 @@ export default function PostCard({
   const caption = post.captions?.content ?? "";
   const { settings, isOwner } = post;
 
-  // Counts hidden by the owner stay visible to the owner.
-  const showLikeCount = isOwner || !settings.hideLikeCount;
-  const showSaveCount = isOwner || !settings.hideSaveCount;
-  const showShareCount = isOwner || !settings.hideShareCount;
+  // Counts only show when the owner ticked "Show ... count"
+  // (stored as hide... = false). Otherwise only the icon is shown.
+  const showLikeCount = !settings.hideLikeCount;
+  const showSaveCount = !settings.hideSaveCount;
+  const showShareCount = !settings.hideShareCount;
+
+  // Comments off: no icon, no count, no way to open them.
+  // Existing comments stay in the database.
   const commentsEnabled = !settings.hideComments;
+
+  // If the owner turns comments off while the sheet is open, close it.
+  useEffect(() => {
+    if (!commentsEnabled) setShowComments(false);
+  }, [commentsEnabled]);
 
   const update = (change: (current: PostData) => PostData) => setPost(change);
 
@@ -201,7 +218,14 @@ export default function PostCard({
 
   const remove = async () => {
     setMenuOpen(false);
-    if (!window.confirm("Delete this post permanently?")) return;
+
+    const ok = await confirm({
+      title: "Delete this post?",
+      message: "This post will be permanently deleted. This can't be undone.",
+      confirmText: "Delete",
+      tone: "danger",
+    });
+    if (!ok) return;
 
     try {
       await deletePost(post.userid, post.postId);
@@ -209,6 +233,15 @@ export default function PostCard({
     } catch (err: unknown) {
       setError(errText(err, "Unable to delete this post."));
     }
+  };
+
+  const openHashtag = (tag: string) => {
+    void confirm({
+      title: `#${tag.replace(/^#/, "")}`,
+      message: "Hashtag search will be added with the search feature.",
+      confirmText: "OK",
+      cancelText: "Close",
+    });
   };
 
   const openSheet = (name: "share" | "report" | "message" | "edit") => {
@@ -222,7 +255,7 @@ export default function PostCard({
   const archiveMenuText = post.archived ? (unarchiveLabel ?? "Unarchive") : "Archive";
 
   return (
-    <article className="overflow-hidden rounded-2xl border border-[#eee4dd] bg-white shadow-[0_5px_24px_rgba(67,43,29,0.045)]">
+    <article className="w-full overflow-hidden border-y border-[#eee4dd] bg-white sm:rounded-2xl sm:border sm:shadow-[0_5px_24px_rgba(67,43,29,0.045)]">
       <style>{`
         @keyframes jd-medal-pop {
           0% { transform: scale(0.3); opacity: 0; }
@@ -339,7 +372,7 @@ export default function PostCard({
 
       {/* Photos */}
       {images.length > 0 && (
-        <div className="relative overflow-hidden bg-[#f0eae5]">
+        <div className="relative w-full overflow-hidden bg-[#f0eae5]">
           <div
             onClick={handleImageClick}
             style={{ touchAction: "manipulation" }}
@@ -416,7 +449,7 @@ export default function PostCard({
       )}
 
       <div className="px-4 pb-4 pt-2 sm:px-5">
-        {/* Actions with counts under each icon */}
+        {/* Actions: icons always show, counts only when the owner allows them */}
         <div className="flex items-start justify-between">
           <div className="-ml-2 flex items-start">
             <ActionButton
@@ -445,10 +478,16 @@ export default function PostCard({
 
             <ActionButton
               label="Send to friends"
+              active={shared}
               count={showShareCount ? post.shareCount : undefined}
               onClick={() => setSheet("share")}
             >
-              <Send size={21} strokeWidth={1.8} className="text-[#6f574a]" />
+              <Send
+                size={21}
+                strokeWidth={1.8}
+                fill={shared ? "currentColor" : "none"}
+                className={shared ? "text-[#994D35]" : "text-[#6f574a]"}
+              />
             </ActionButton>
           </div>
 
@@ -503,9 +542,7 @@ export default function PostCard({
               <button
                 key={`${post.postId}-${tag}`}
                 type="button"
-                onClick={() =>
-                  window.alert(`Hashtag search for #${tag} will be added with the search feature.`)
-                }
+                onClick={() => openHashtag(tag)}
                 className="text-sm font-medium text-[#9a6e58] transition hover:text-[#654536]"
               >
                 #{tag.replace(/^#/, "")}
@@ -544,7 +581,10 @@ export default function PostCard({
         <ShareSheet
           post={post}
           onClose={() => setSheet(null)}
-          onShared={(shareCount) => update((current) => ({ ...current, shareCount }))}
+          onShared={(shareCount) => {
+            setShared(true);
+            update((current) => ({ ...current, shareCount }));
+          }}
         />
       )}
 
@@ -575,9 +615,15 @@ export default function PostCard({
         <EditPostSheet
           post={post}
           onClose={() => setSheet(null)}
-          onSaved={(changes) => update((current) => ({ ...current, ...changes }))}
+          onSaved={(changes) => {
+            // Already saved in the database; now the card updates instantly.
+            update((current) => ({ ...current, ...changes }));
+            if (changes.settings?.hideComments) setShowComments(false);
+          }}
         />
       )}
+
+      {dialog}
     </article>
   );
 }
