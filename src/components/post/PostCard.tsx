@@ -3,8 +3,6 @@ import { useNavigate } from "react-router-dom";
 import {
   Archive,
   Bookmark,
-  ChevronLeft,
-  ChevronRight,
   Eye,
   Flag,
   MessageCircle,
@@ -13,6 +11,8 @@ import {
   Pencil,
   Send,
   Trash2,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import {
   archivePost,
@@ -92,6 +92,8 @@ export default function PostCard({
     Boolean((initialPost as { shared?: boolean }).shared),
   );
   const [imageIndex, setImageIndex] = useState(0);
+  const [videoMuted, setVideoMuted] = useState(true);
+  const carouselRef = useRef<HTMLDivElement>(null);
   const [showComments, setShowComments] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -184,6 +186,26 @@ export default function PostCard({
     }
   };
 
+  const handleCarouselScroll = () => {
+    const carousel = carouselRef.current;
+    if (!carousel || carousel.clientWidth === 0) return;
+    setImageIndex(
+      Math.min(
+        images.length - 1,
+        Math.round(carousel.scrollLeft / carousel.clientWidth),
+      ),
+    );
+  };
+
+  const scrollToImage = (index: number) => {
+    const carousel = carouselRef.current;
+    if (!carousel) return;
+    carousel.scrollTo({
+      left: index * carousel.clientWidth,
+      behavior: "smooth",
+    });
+  };
+
   const toggleSave = async () => {
     const saved = !post.saved;
     const previous = post;
@@ -264,6 +286,8 @@ export default function PostCard({
           80% { transform: scale(1); opacity: 1; }
           100% { transform: scale(1.2); opacity: 0; }
         }
+        .jd-post-carousel { scrollbar-width: none; }
+        .jd-post-carousel::-webkit-scrollbar { display: none; }
       `}</style>
 
       {/* Header */}
@@ -370,63 +394,69 @@ export default function PostCard({
         </div>
       </div>
 
+      {/* Video */}
+      {post.videoUrl && (
+        <div className="relative w-full overflow-hidden bg-black">
+          <video
+            src={post.videoUrl}
+            controls
+            playsInline
+            muted={videoMuted}
+            poster={post.videoMeta?.thumbnailUrl}
+            className="max-h-[600px] w-full bg-black object-contain"
+          />
+          <button
+            type="button"
+            aria-label={videoMuted ? "Unmute video" : "Mute video"}
+            aria-pressed={!videoMuted}
+            onClick={() => setVideoMuted((muted) => !muted)}
+            className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/65 text-white shadow backdrop-blur transition hover:bg-black/80"
+          >
+            {videoMuted ? <VolumeX size={19} /> : <Volume2 size={19} />}
+          </button>
+        </div>
+      )}
+
       {/* Photos */}
       {images.length > 0 && (
         <div className="relative w-full overflow-hidden bg-[#f0eae5]">
           <div
-            onClick={handleImageClick}
-            style={{ touchAction: "manipulation" }}
-            className="relative flex aspect-[4/3] max-h-[600px] w-full cursor-pointer select-none items-center justify-center sm:aspect-[5/4]"
+            ref={carouselRef}
+            onScroll={handleCarouselScroll}
+            role="region"
+            aria-label="Post photos. Swipe or scroll horizontally to view each image."
+            className="jd-post-carousel flex w-full snap-x snap-mandatory overflow-x-auto overscroll-x-contain scroll-smooth"
           >
-            <img
-              key={`${post.postId}-${images[currentImage]}`}
-              src={images[currentImage]}
-              alt={`Post by ${post.author.name || post.author.username}`}
-              draggable={false}
-              className="h-full w-full object-contain"
-              loading="lazy"
-            />
-
-            {burst > 0 && (
-              <img
-                key={burst}
-                src={MEDAL_ACTIVE_ICON}
-                alt=""
-                aria-hidden="true"
-                className="pointer-events-none absolute left-1/2 top-1/2 h-32 w-32 -ml-16 -mt-16 drop-shadow-xl"
-                style={{ animation: "jd-medal-pop 1s ease-out forwards" }}
-              />
-            )}
-
-            {images.length > 1 && (
-              <>
-                <button
-                  type="button"
-                  aria-label="Previous image"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setImageIndex((currentImage - 1 + images.length) % images.length);
-                  }}
-                  className="absolute left-3 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-[#49352b] shadow-md backdrop-blur transition hover:bg-white"
-                >
-                  <ChevronLeft size={21} />
-                </button>
-                <button
-                  type="button"
-                  aria-label="Next image"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setImageIndex((currentImage + 1) % images.length);
-                  }}
-                  className="absolute right-3 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-[#49352b] shadow-md backdrop-blur transition hover:bg-white"
-                >
-                  <ChevronRight size={21} />
-                </button>
-                <span className="absolute right-3 top-3 rounded-full bg-[#2b211bcc] px-2.5 py-1 text-[11px] font-semibold text-white">
-                  {currentImage + 1} / {images.length}
-                </span>
-              </>
-            )}
+            {images.map((image, index) => (
+              <div
+                key={`${post.postId}-${image}`}
+                onClick={handleImageClick}
+                className="relative flex aspect-[4/3] max-h-[600px] w-full shrink-0 snap-center cursor-pointer select-none items-center justify-center sm:aspect-[5/4]"
+              >
+                <img
+                  src={image}
+                  alt={`Post photo ${index + 1} by ${post.author.name || post.author.username}`}
+                  draggable={false}
+                  className="h-full w-full object-contain"
+                  loading="lazy"
+                />
+                {index === currentImage && burst > 0 && (
+                  <img
+                    key={burst}
+                    src={MEDAL_ACTIVE_ICON}
+                    alt=""
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-1/2 top-1/2 -ml-16 -mt-16 h-32 w-32 drop-shadow-xl"
+                    style={{ animation: "jd-medal-pop 1s ease-out forwards" }}
+                  />
+                )}
+                {images.length > 1 && index === currentImage && (
+                  <span className="absolute right-3 top-3 rounded-full bg-[#2b211bcc] px-2.5 py-1 text-[11px] font-semibold text-white">
+                    {currentImage + 1} / {images.length}
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
 
           {images.length > 1 && (
@@ -437,7 +467,7 @@ export default function PostCard({
                   type="button"
                   aria-label={`Show image ${index + 1}`}
                   aria-current={currentImage === index}
-                  onClick={() => setImageIndex(index)}
+                  onClick={() => scrollToImage(index)}
                   className={`h-1.5 rounded-full transition-all ${
                     currentImage === index ? "w-5 bg-[#795744]" : "w-1.5 bg-[#ddcec3] hover:bg-[#b79d8a]"
                   }`}
@@ -534,6 +564,49 @@ export default function PostCard({
               </button>
             )}
           </div>
+        )}
+
+        {post.poll && (
+          <section
+            aria-label="Post poll"
+            className="mt-3 rounded-2xl border border-[#eee4dd] bg-[#fffaf7] p-4"
+          >
+            <h3 className="mb-3 text-[15px] font-bold leading-6 text-[#332720]">
+              {post.poll.question}
+            </h3>
+            <div className="space-y-2.5">
+              {post.poll.options.map((option) => {
+                const totalVotes = post.poll?.options.reduce(
+                  (sum, item) => sum + item.voteCount,
+                  0,
+                ) ?? 0;
+                const percentage = totalVotes
+                  ? Math.round((option.voteCount / totalVotes) * 100)
+                  : 0;
+                return (
+                  <div key={option.optionId}>
+                    <div className="mb-1 flex items-center justify-between gap-3 text-sm">
+                      <span className="font-medium text-[#493c34]">{option.text}</span>
+                      <span className="shrink-0 text-xs font-semibold text-[#8b7a70]">
+                        {percentage}%
+                      </span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-[#eee4dd]">
+                      <div
+                        className="h-full rounded-full bg-[#c58a6e] transition-[width]"
+                        style={{ width: `${percentage}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mt-3 text-xs font-medium text-[#8b7a70]">
+              {post.poll.options.reduce((sum, option) => sum + option.voteCount, 0)} votes
+              {" · Ends "}
+              {post.poll.endsAt.slice(0, 10)}
+            </p>
+          </section>
         )}
 
         {post.hashtags.length > 0 && (

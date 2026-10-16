@@ -40,12 +40,30 @@ export interface PostSettings {
   hideSaveCount: boolean;
 }
 
+export interface PostPoll {
+  question: string;
+  options: Array<{
+    optionId: string;
+    text: string;
+    voteCount: number;
+  }>;
+  endsAt: string;
+}
+
 export interface PostData {
   postId: string;
   userid: string;
   createdAt: string;
   imageUrl?: Record<string, string | undefined>;
   captions?: { captionId?: string; content?: string };
+  videoUrl?: string;
+  videoMeta?: {
+    duration?: number;
+    thumbnailUrl?: string;
+    width?: number;
+    height?: number;
+  };
+  poll?: PostPoll;
   hashtags: string[];
   mentions: MentionRef[];
   visibility: "public" | "friends" | "private";

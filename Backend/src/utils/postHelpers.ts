@@ -63,6 +63,18 @@ export interface RawPost {
   createdAt?: Date | string;
   imageUrl?: Record<string, string>;
   captions?: { captionId?: string; content?: string };
+  videoUrl?: string;
+  videoMeta?: {
+    duration?: number;
+    thumbnailUrl?: string;
+    width?: number;
+    height?: number;
+  };
+  poll?: {
+    question: string;
+    options: Array<{ optionId: string; text: string; votes?: string[] }>;
+    endsAt: Date | string;
+  };
   likes?: Array<{ likeId?: string; userId: string }>;
   comments?: RawComment[];
   shares?: Array<{ shareId?: string; fromUserId?: string; toUserId?: string }>;
@@ -255,6 +267,15 @@ export const normalizeSettings = (settings: RawPost["settings"]) => ({
   hideSaveCount: settings?.hideSaveCount ?? true,
 });
 
+export const getPostCaption = (post: Pick<RawPost, "captions">): string => {
+  const captions = post.captions as
+    | RawPost["captions"]
+    | Array<{ captionId?: string; content?: string }>
+    | undefined;
+  const caption = Array.isArray(captions) ? captions[0] : captions;
+  return caption?.content ?? "";
+};
+
 export const serializeComment = (
   comment: RawComment,
   viewerId: string,
@@ -282,6 +303,12 @@ export const serializeComment = (
 
 export const serializePost = (post: RawPost, context: SerializeContext) => {
   const { viewerId } = context;
+  const caption = Array.isArray(post.captions)
+    ? post.captions[0]
+    : post.captions;
+  const mentions = Array.isArray(post.mentions)
+    ? post.mentions
+    : post.mentions?.mentions ?? [];
   const visibleComments = (post.comments ?? []).filter(
     (comment) => comment.visible !== false,
   );
@@ -296,11 +323,26 @@ export const serializePost = (post: RawPost, context: SerializeContext) => {
     createdAt: post.createdAt,
     imageUrl: post.imageUrl ?? {},
     captions: {
-      captionId: post.captions?.captionId ?? "",
-      content: post.captions?.content ?? "",
+      captionId: caption?.captionId ?? "",
+      content: getPostCaption(post),
     },
+    ...(post.videoUrl ? { videoUrl: post.videoUrl } : {}),
+    ...(post.videoMeta ? { videoMeta: post.videoMeta } : {}),
+    ...(post.poll
+      ? {
+          poll: {
+            question: post.poll.question,
+            options: post.poll.options.map((option) => ({
+              optionId: option.optionId,
+              text: option.text,
+              voteCount: (option.votes ?? []).length,
+            })),
+            endsAt: post.poll.endsAt,
+          },
+        }
+      : {}),
     hashtags: post.hashtags ?? [],
-    mentions: post.mentions?.mentions ?? [],
+    mentions,
     visibility: post.visibility ?? "friends",
     archived: Boolean(post.archived),
     settings: normalizeSettings(post.settings),
