@@ -338,6 +338,10 @@ export const serializePost = (post: RawPost, context: SerializeContext) => {
               voteCount: (option.votes ?? []).length,
             })),
             endsAt: post.poll.endsAt,
+            votedOptionId:
+              post.poll.options.find((option) =>
+                (option.votes ?? []).includes(viewerId),
+              )?.optionId ?? null,
           },
         }
       : {}),

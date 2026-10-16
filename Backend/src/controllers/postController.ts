@@ -349,6 +349,134 @@ export const getPost = async (request: Request, response: Response) => {
 };
 
 // --------------------------------------------------
+// VOTE ON A POLL
+// POST /api/posts/:ownerId/:postId/poll/vote   Body: { optionId: string }
+// --------------------------------------------------
+
+export const voteOnPoll = async (request: Request, response: Response) => {
+  try {
+    const context = await loadPostContext(request, response);
+    if (!context) return;
+
+    const optionId = bodyOf(request).optionId;
+    const poll = context.post.poll;
+    if (typeof optionId !== "string" || !poll) {
+      sendError(response, 400, "Choose an option from a post poll.");
+      return;
+    }
+    if (new Date(poll.endsAt).getTime() <= Date.now()) {
+      sendError(response, 400, "This poll has ended.");
+      return;
+    }
+    if (!poll.options.some((option) => option.optionId === optionId)) {
+      sendError(response, 400, "That poll option is not available.");
+      return;
+    }
+
+    const viewerId = context.viewerId;
+    const postId = context.post.postId;
+    const ownerId = context.owner.userid;
+    const voteTime = new Date();
+
+    const updated = await Profile.collection.updateOne(
+      {
+        userid: ownerId,
+        posts: {
+          $elemMatch: {
+            postId,
+            "poll.endsAt": { $gt: voteTime },
+            "poll.options.optionId": optionId,
+          },
+        },
+      },
+      [
+        {
+          $set: {
+            posts: {
+              $map: {
+                input: "$posts",
+                as: "post",
+                in: {
+                  $cond: [
+                    { $eq: ["$$post.postId", postId] },
+                    {
+                      $mergeObjects: [
+                        "$$post",
+                        {
+                          poll: {
+                            $mergeObjects: [
+                              "$$post.poll",
+                              {
+                                options: {
+                                  $map: {
+                                    input: "$$post.poll.options",
+                                    as: "option",
+                                    in: {
+                                      $mergeObjects: [
+                                        "$$option",
+                                        {
+                                          votes: {
+                                            $cond: [
+                                              { $eq: ["$$option.optionId", optionId] },
+                                              {
+                                                $setUnion: [
+                                                  { $ifNull: ["$$option.votes", []] },
+                                                  [viewerId],
+                                                ],
+                                              },
+                                              {
+                                                $filter: {
+                                                  input: { $ifNull: ["$$option.votes", []] },
+                                                  as: "voter",
+                                                  cond: { $ne: ["$$voter", viewerId] },
+                                                },
+                                              },
+                                            ],
+                                          },
+                                        },
+                                      ],
+                                    },
+                                  },
+                                },
+                              },
+                            ],
+                          },
+                        },
+                      ],
+                    },
+                    "$$post",
+                  ],
+                },
+              },
+            },
+            updatedAt: new Date(),
+          },
+        },
+      ],
+    );
+    if (updated.matchedCount === 0) {
+      sendError(response, 409, "This poll changed or has ended. Refresh and try again.");
+      return;
+    }
+
+    const fresh = await loadRawPost(ownerId, postId);
+    if (!fresh?.poll) {
+      sendError(response, 404, "Poll not found.");
+      return;
+    }
+
+    response.json({
+      success: true,
+      data: {
+        poll: serializePost(fresh, { viewerId }).poll,
+      },
+    });
+  } catch (error) {
+    serverError(response, "Vote on poll", error);
+  }
+};
+
+// --------------------------------------------------
 // LIKE / UNLIKE
 // POST /api/posts/:ownerId/:postId/like   Body: { liked: boolean }
 // --------------------------------------------------

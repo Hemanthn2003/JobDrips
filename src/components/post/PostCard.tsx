@@ -19,6 +19,7 @@ import {
   deletePost,
   setLike,
   setSave,
+  voteOnPoll,
 } from "../../services/postService";
 import type { PostData, PostPerson } from "../../services/postService";
 import { useConfirm } from "../common/ConfirmModal";
@@ -96,6 +97,7 @@ export default function PostCard({
   const carouselRef = useRef<HTMLDivElement>(null);
   const [showComments, setShowComments] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [pollVoting, setPollVoting] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [sheet, setSheet] = useState<"share" | "report" | "message" | "edit" | null>(null);
   const [burst, setBurst] = useState(0);
@@ -113,6 +115,7 @@ export default function PostCard({
   const images = getPostImages(post);
   const currentImage = Math.min(imageIndex, Math.max(images.length - 1, 0));
   const caption = post.captions?.content ?? "";
+  const poll = post.poll;
   const { settings, isOwner } = post;
 
   // Counts only show when the owner ticked "Show ... count"
@@ -204,6 +207,43 @@ export default function PostCard({
       left: index * carousel.clientWidth,
       behavior: "smooth",
     });
+  };
+
+  const voteForPoll = async (optionId: string) => {
+    if (!post.poll || pollVoting) return;
+
+    const previous = post;
+    const previousOptionId = post.poll.votedOptionId;
+    if (previousOptionId === optionId) return;
+
+    setError("");
+    setPollVoting(optionId);
+    update((current) => ({
+      ...current,
+      poll: current.poll
+        ? {
+            ...current.poll,
+            votedOptionId: optionId,
+            options: current.poll.options.map((option) => ({
+              ...option,
+              voteCount:
+                option.voteCount +
+                (option.optionId === optionId ? 1 : 0) -
+                (option.optionId === previousOptionId ? 1 : 0),
+            })),
+          }
+        : current.poll,
+    }));
+
+    try {
+      const poll = await voteOnPoll(post.userid, post.postId, optionId);
+      update((current) => ({ ...current, poll }));
+    } catch (err: unknown) {
+      setPost(previous);
+      setError(errText(err, "Unable to record your vote."));
+    } finally {
+      setPollVoting(null);
+    }
   };
 
   const toggleSave = async () => {
@@ -566,17 +606,17 @@ export default function PostCard({
           </div>
         )}
 
-        {post.poll && (
+        {poll && (
           <section
             aria-label="Post poll"
             className="mt-3 rounded-2xl border border-[#eee4dd] bg-[#fffaf7] p-4"
           >
             <h3 className="mb-3 text-[15px] font-bold leading-6 text-[#332720]">
-              {post.poll.question}
+              {poll.question}
             </h3>
             <div className="space-y-2.5">
-              {post.poll.options.map((option) => {
-                const totalVotes = post.poll?.options.reduce(
+              {poll.options.map((option) => {
+                const totalVotes = poll.options.reduce(
                   (sum, item) => sum + item.voteCount,
                   0,
                 ) ?? 0;
@@ -584,7 +624,18 @@ export default function PostCard({
                   ? Math.round((option.voteCount / totalVotes) * 100)
                   : 0;
                 return (
-                  <div key={option.optionId}>
+                  <button
+                    key={option.optionId}
+                    type="button"
+                    onClick={() => void voteForPoll(option.optionId)}
+                    disabled={pollVoting !== null}
+                    aria-pressed={poll.votedOptionId === option.optionId}
+                    className={`block w-full rounded-xl p-2 text-left transition hover:bg-[#f8eee8] disabled:cursor-wait ${
+                    poll.votedOptionId === option.optionId
+                        ? "bg-[#f8eee8] ring-1 ring-[#c58a6e]"
+                        : ""
+                    }`}
+                  >
                     <div className="mb-1 flex items-center justify-between gap-3 text-sm">
                       <span className="font-medium text-[#493c34]">{option.text}</span>
                       <span className="shrink-0 text-xs font-semibold text-[#8b7a70]">
@@ -597,14 +648,14 @@ export default function PostCard({
                         style={{ width: `${percentage}%` }}
                       />
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
             <p className="mt-3 text-xs font-medium text-[#8b7a70]">
-              {post.poll.options.reduce((sum, option) => sum + option.voteCount, 0)} votes
+              {poll.options.reduce((sum, option) => sum + option.voteCount, 0)} votes
               {" · Ends "}
-              {post.poll.endsAt.slice(0, 10)}
+              {poll.endsAt.slice(0, 10)}
             </p>
           </section>
         )}

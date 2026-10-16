@@ -14,6 +14,7 @@ import {
   setPostSave,
   sharePost,
   updatePost,
+  voteOnPoll,
 } from "../controllers/postController.js";
 
 import { authenticate } from "../utils/authMiddleware.js";
@@ -33,6 +34,7 @@ router.delete("/:ownerId/:postId", authenticate, emitPostChange, deletePost);
 router.post("/:ownerId/:postId/like", authenticate, emitPostChange, setPostLike);
 router.post("/:ownerId/:postId/save", authenticate, emitPostChange, setPostSave);
 router.post("/:ownerId/:postId/share", authenticate, emitPostChange, sharePost);
+router.post("/:ownerId/:postId/poll/vote", authenticate, emitPostChange, voteOnPoll);
 router.post("/:ownerId/:postId/archive", authenticate, emitPostChange, archivePost);
 router.post("/:ownerId/:postId/report", authenticate, reportPost);
 

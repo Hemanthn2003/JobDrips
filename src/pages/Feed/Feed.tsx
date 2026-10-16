@@ -43,54 +43,68 @@ const Feed = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const reloadTimer = useRef<number | undefined>(undefined);
+  const lastSocketReload = useRef(0);
   const lastLoad = useRef(0);
+  const inFlightLoad = useRef<Promise<void> | null>(null);
   const viewerRef = useRef<PostPerson | null>(null);
   const postsRef = useRef<FeedPost[]>([]);
-  viewerRef.current = viewer;
-  postsRef.current = posts;
+  useEffect(() => {
+    viewerRef.current = viewer;
+    postsRef.current = posts;
+  }, [viewer, posts]);
 
   // silent = refresh in the background (no skeleton, errors ignored).
-  const loadFeed = useCallback(async (silent = false) => {
-    if (!silent) {
-      setLoading(true);
-      setError("");
-    }
+  const loadFeed = useCallback((silent = false): Promise<void> => {
+    if (inFlightLoad.current) return inFlightLoad.current;
 
-    try {
-      const result = await getFeed();
-      const incoming = result.posts as FeedPost[];
-      lastLoad.current = Date.now();
+    const pendingLoad = (async () => {
+      try {
+        const result = await getFeed();
+        const incoming = result.posts as FeedPost[];
+        lastLoad.current = Date.now();
+        if (!silent) setError("");
 
-      if (silent) {
-        // Posts that are newer than everything on screen.
-        const current = postsRef.current;
-        const known = new Set(current.map(idOf));
-        const newest = current.reduce((max, post) => Math.max(max, timeOf(post)), 0);
-        const fresh = incoming.filter(
-          (post) => !known.has(idOf(post)) && timeOf(post) > newest,
-        );
+        if (silent) {
+          // Posts that are newer than everything on screen.
+          const current = postsRef.current;
+          const known = new Set(current.map(idOf));
+          const newest = current.reduce((max, post) => Math.max(max, timeOf(post)), 0);
+          const fresh = incoming.filter(
+            (post) => !known.has(idOf(post)) && timeOf(post) > newest,
+          );
 
-        // Reading further down: don't move the page, offer a button instead.
-        if (fresh.length > 0 && window.scrollY > SCROLLED_DOWN_PX) {
-          setPending({ posts: incoming, viewer: result.viewer, freshCount: fresh.length });
-          return;
+          // Reading further down: don't move the page, offer a button instead.
+          if (fresh.length > 0 && window.scrollY > SCROLLED_DOWN_PX) {
+            setPending({ posts: incoming, viewer: result.viewer, freshCount: fresh.length });
+            return;
+          }
         }
-      }
 
-      setPending(null);
-      setPosts(incoming);
-      setViewer(result.viewer);
-    } catch (err) {
-      if (!silent) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Something went wrong while loading your feed.",
-        );
+        setPending(null);
+        setPosts(incoming);
+        setViewer(result.viewer);
+      } catch (err) {
+        if (!silent) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Something went wrong while loading your feed.",
+          );
+        }
+      } finally {
+        if (!silent) setLoading(false);
       }
-    } finally {
-      if (!silent) setLoading(false);
-    }
+    })();
+    inFlightLoad.current = pendingLoad;
+    void pendingLoad.then(
+      () => {
+        if (inFlightLoad.current === pendingLoad) inFlightLoad.current = null;
+      },
+      () => {
+        if (inFlightLoad.current === pendingLoad) inFlightLoad.current = null;
+      },
+    );
+    return pendingLoad;
   }, []);
 
   useEffect(() => {
@@ -127,8 +141,10 @@ const Feed = () => {
 
     window.clearTimeout(reloadTimer.current);
     reloadTimer.current = window.setTimeout(() => {
+      if (Date.now() - lastSocketReload.current < 1_500) return;
+      lastSocketReload.current = Date.now();
       void loadFeed(true);
-    }, 400);
+    }, 500);
   });
 
   const showPending = () => {
@@ -194,7 +210,11 @@ const Feed = () => {
             </p>
             <button
               type="button"
-              onClick={() => void loadFeed()}
+              onClick={() => {
+                setLoading(true);
+                setError("");
+                void loadFeed();
+              }}
               className="mt-5 rounded-xl bg-[#654536] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#503628]"
             >
               Try again

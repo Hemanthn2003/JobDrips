@@ -48,6 +48,7 @@ export interface PostPoll {
     voteCount: number;
   }>;
   endsAt: string;
+  votedOptionId: string | null;
 }
 
 export interface PostData {
@@ -133,15 +134,30 @@ const postPath = (ownerId: string, postId: string) =>
 // Feed and single post
 // --------------------------------------------------
 
+let feedRequest: Promise<{
+  posts: PostData[];
+  viewer: PostPerson;
+}> | null = null;
+
 export async function getFeed(): Promise<{
   posts: PostData[];
   viewer: PostPerson;
 }> {
-  const result = await request<
-    ApiResult<{ posts: PostData[]; total: number; viewer: PostPerson }>
-  >("/api/feed");
+  if (feedRequest) return feedRequest;
 
-  return { posts: result.data.posts ?? [], viewer: result.data.viewer };
+  const pending = request<
+    ApiResult<{ posts: PostData[]; total: number; viewer: PostPerson }>
+  >("/api/feed").then((result) => ({
+    posts: result.data.posts ?? [],
+    viewer: result.data.viewer,
+  }));
+  feedRequest = pending;
+
+  try {
+    return await pending;
+  } finally {
+    if (feedRequest === pending) feedRequest = null;
+  }
 }
 
 export async function getPost(
@@ -153,6 +169,19 @@ export async function getPost(
   );
 
   return result.data;
+}
+
+export async function voteOnPoll(
+  ownerId: string,
+  postId: string,
+  optionId: string,
+): Promise<PostPoll> {
+  const result = await request<ApiResult<{ poll: PostPoll }>>(
+    `${postPath(ownerId, postId)}/poll/vote`,
+    json({ optionId }),
+  );
+
+  return result.data.poll;
 }
 
 // --------------------------------------------------
