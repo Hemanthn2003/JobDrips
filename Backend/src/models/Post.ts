@@ -1,4 +1,3 @@
-
 import mongoose, { Schema } from "mongoose";
 
 const mentionedUserSchema = new Schema(
@@ -58,6 +57,46 @@ const shareSchema = new Schema(
   { _id: false }
 );
 
+/* ───────────── NEW: video details ───────────── */
+const videoMetaSchema = new Schema(
+  {
+    publicId: { type: String, default: "" }, // Cloudinary id of the original upload
+    originalDuration: { type: Number, default: 0 }, // seconds
+    startTime: { type: Number, default: 0 }, // trim start (seconds)
+    endTime: { type: Number, default: 0 }, // trim end (seconds)
+    duration: { type: Number, default: 0 }, // endTime - startTime (max 90)
+    width: { type: Number, default: 0 },
+    height: { type: Number, default: 0 },
+    thumbnailUrl: { type: String, default: "" },
+  },
+  { _id: false }
+);
+
+/* ───────────── NEW: poll ───────────── */
+const pollOptionSchema = new Schema(
+  {
+    optionId: { type: String, required: true },
+    text: { type: String, required: true, trim: true, maxlength: 80 },
+    votes: { type: [String], default: [] }, // userIds who voted
+  },
+  { _id: false }
+);
+
+const pollSchema = new Schema(
+  {
+    question: { type: String, required: true, trim: true, maxlength: 200 },
+    options: {
+      type: [pollOptionSchema],
+      validate: {
+        validator: (o: unknown[]) => o.length >= 2 && o.length <= 4,
+        message: "A poll needs between two and four options.",
+      },
+    },
+    endsAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const postSchema = new Schema(
   {
     postId: {
@@ -83,6 +122,21 @@ const postSchema = new Schema(
         validator: (urls: string[]) => urls.length <= 5,
         message: "A post can contain at most five images.",
       },
+    },
+    /* NEW: one video per post (trimmed URL, playable directly) */
+    videoUrl: {
+      type: String,
+      default: "",
+    },
+    /* NEW */
+    videoMeta: {
+      type: videoMetaSchema,
+      default: undefined,
+    },
+    /* NEW: optional poll */
+    poll: {
+      type: pollSchema,
+      default: undefined,
     },
     hashtags: {
       type: [String],
@@ -123,6 +177,11 @@ const postSchema = new Schema(
         default: false,
       },
       hideShareCount: {
+        type: Boolean,
+        default: false,
+      },
+      /* NEW: for the "Show save count" checkbox */
+      hideSaveCount: {
         type: Boolean,
         default: false,
       },

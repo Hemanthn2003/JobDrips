@@ -7,6 +7,7 @@ import uploadRoutes from "./routes/uploadRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
 import feedRoutes from "./routes/feedRoutes.js";
 import postRoutes from "./routes/postRoutes.js";
+import postComposerRoutes from "./routes/postComposerRoutes.js"; // ← the Add Post routes file (use its real file name)
 import messageRoutes from "./routes/messageRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
 import recommendationRoutes from "./routes/recommendationRoutes.js";
@@ -59,6 +60,9 @@ app.use("/api/feed", feedRoutes);
 
 // Post routes (like, save, share, comments, edit, report ...)
 app.use("/api/posts", postRoutes);
+
+// Add Post page routes (composer context, #hashtag + @mention suggestions, create post)
+app.use("/api/post-composer", postComposerRoutes);
 
 // Message routes (messages, shared posts, mention notifications)
 app.use("/api/messages", messageRoutes);
