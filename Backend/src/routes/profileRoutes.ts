@@ -23,6 +23,10 @@ import {
   declineFriendRequest,
 } from "../controllers/profileController.js";
 
+import {
+  getArchivedPosts,
+  setPostArchived,
+} from "../controllers/archiveController.js";
 import { removeFriend } from "../controllers/friendController.js";
 import { authenticate } from "../utils/authMiddleware.js";
 import {
@@ -37,6 +41,15 @@ const router = Router();
 router.get("/me", authenticate, getMyProfile);
 router.patch("/me", authenticate, emitProfileChange, updateMyProfile);
 router.patch("/me/image", authenticate, emitProfileChange, updateProfileImage);
+
+// Archived posts (settings -> Archived). Must stay above "/:userid".
+router.get("/me/archived-posts", authenticate, getArchivedPosts);
+router.patch(
+  "/me/posts/:postId/archive",
+  authenticate,
+  emitProfileChange,
+  setPostArchived,
+);
 
 // Username availability (must stay above "/:userid")
 router.get("/username-availability", authenticate, checkUsernameAvailability);

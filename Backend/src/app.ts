@@ -10,6 +10,7 @@ import postRoutes from "./routes/postRoutes.js";
 import messageRoutes from "./routes/messageRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
 import recommendationRoutes from "./routes/recommendationRoutes.js";
+import searchRoutes from "./routes/searchRoutes.js";
 
 const app = express();
 
@@ -67,6 +68,9 @@ app.use("/api/notifications", notificationRoutes);
 
 // Recommendations ("People You May Know" page)
 app.use("/api/recommendations", recommendationRoutes);
+
+// Header search (people + posts)
+app.use("/api/search", searchRoutes);
 
 // Handle unknown routes
 app.use((_request, response) => {

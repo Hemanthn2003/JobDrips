@@ -4,6 +4,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import { profileService } from "../../services/profileService";
 import { MessageSheet } from "../../components/post/PostSheets";
 import StoryViewer from "../../components/story/StoryViewer";
+import PostCard from "../../components/post/PostCard";
+import { getPost } from "../../services/postService";
+import type { PostData, PostPerson } from "../../services/postService";
 import type {
   Education,
   EducationInput,
@@ -28,6 +31,8 @@ const USERNAME_PATTERN = /^[a-zA-Z0-9_.]{3,30}$/;
 
 type Tab = "posts" | "mentions" | "saved";
 type ImageKind = "profile" | "cover" | "story";
+type SettingsView = "menu" | "account" | "archived";
+type AccountChoice = "public" | "private";
 
 type UsernameState =
   | "idle"
@@ -45,12 +50,15 @@ const ICONS = {
   chevron: "m9 6 6 6-6 6",
   pencil: "M12 20h9 M16.5 3.5a2.12 2.12 0 0 1 3 3L9 17l-4 1 1-4Z",
   plus: "M12 5v14 M5 12h14",
-  heart:
-    "M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z",
-  bookmark: "M6 4h12v17l-6-4-6 4Z",
-  comment: "M4 5h16v11H9l-5 4Z",
   lock: "M4 10h16v11H4Z M8 10V7a4 4 0 0 1 8 0v3",
-  eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z M12 14.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z",
+  settings:
+    "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
+  arrowLeft: "M19 12H5 M12 19l-7-7 7-7",
+  archive: "M3 4h18v4H3Z M5 8v12h14V8 M10 12h4",
+  globe:
+    "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z M3 12h18 M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18",
+  check: "m5 12 5 5 9-10",
+  user: "M20 21a8 8 0 0 0-16 0 M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z",
 } as const;
 
 const inputClass =
@@ -64,6 +72,8 @@ const actionPillClass =
   "rounded-full bg-gradient-to-r from-[#CB8969] to-[#994D35] px-4 py-2 text-xs font-extrabold text-white shadow-sm disabled:opacity-60";
 const mutedPillClass =
   "rounded-full border border-[#E0CFC4] bg-[#FFF8F3] px-4 py-2 text-xs font-bold text-[#8D776B]";
+const roundIconButtonClass =
+  "flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#F4E7DE] text-[#80533E] transition hover:bg-[#EEDACD] active:scale-95";
 
 const errMsg = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
@@ -74,6 +84,13 @@ const isNonEmptyString = (value: unknown): value is string =>
 const isStoryActive = (story: Story): boolean =>
   new Date(story.expiresAt).getTime() > Date.now();
 
+const isArchivedPostItem = (item: unknown): boolean =>
+  Boolean(
+    item &&
+      typeof item === "object" &&
+      (item as Record<string, unknown>).archived === true,
+  );
+
 const formatDate = (value?: string): string => {
   if (!value) return "Not available";
   const date = new Date(value);
@@ -81,8 +98,6 @@ const formatDate = (value?: string): string => {
     ? "Not available"
     : date.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
 };
-
-
 
 const websiteHref = (value: string): string =>
   /^https?:\/\//i.test(value) ? value : `https://${value}`;
@@ -271,6 +286,295 @@ function Sheet({
           </button>
         </div>
         {children}
+      </section>
+    </div>
+  );
+}
+
+// --------------------------------------------------
+// Settings (account type + archived posts)
+// --------------------------------------------------
+
+/** Sheet with a back arrow (left, optional) and an X (right, always). */
+function SettingsSheet({
+  title,
+  subtitle,
+  onBack,
+  onClose,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  onBack?: () => void;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[150] flex items-end justify-center bg-[#2D1D16]/55 p-0 backdrop-blur-sm sm:items-center sm:p-5"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-t-[30px] border border-[#EBDCD1] bg-[#FFFCF9] shadow-2xl sm:rounded-[30px]"
+      >
+        <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-[#F0E3DA] bg-[#FFFCF9]/95 px-4 py-4 backdrop-blur sm:px-6">
+          {onBack ? (
+            <button
+              type="button"
+              onClick={onBack}
+              aria-label="Back"
+              className={roundIconButtonClass}
+            >
+              <Icon d={ICONS.arrowLeft} className="h-5 w-5" />
+            </button>
+          ) : (
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#F4E4D9] to-[#E8C6B2] text-[#985438]">
+              <Icon d={ICONS.settings} className="h-5 w-5" />
+            </span>
+          )}
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-lg font-black text-[#30231E]">
+              {title}
+            </h2>
+            {subtitle && (
+              <p className="truncate text-xs text-[#80695D]">{subtitle}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className={`${roundIconButtonClass} text-2xl`}
+          >
+            ×
+          </button>
+        </div>
+        <div className="p-4 sm:p-6">{children}</div>
+      </section>
+    </div>
+  );
+}
+
+function SettingsRow({
+  icon,
+  title,
+  description,
+  onClick,
+}: {
+  icon: string;
+  title: string;
+  description: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group flex w-full items-center gap-4 rounded-2xl border border-[#EBDCD1] bg-white p-4 text-left shadow-[0_2px_10px_rgba(103,62,42,0.04)] transition hover:border-[#D9B7A5] hover:shadow-[0_6px_18px_rgba(103,62,42,0.09)] active:scale-[0.99]"
+    >
+      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#F8EEE8] to-[#EBCDBB] text-[#A4543A]">
+        <Icon d={icon} className="h-6 w-6" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-extrabold text-[#30231E]">
+          {title}
+        </span>
+        <span className="mt-0.5 block text-xs leading-5 text-[#80695D]">
+          {description}
+        </span>
+      </span>
+      <Icon
+        d={ICONS.chevron}
+        className="h-5 w-5 shrink-0 text-[#B2A096] transition group-hover:translate-x-0.5"
+      />
+    </button>
+  );
+}
+
+function AccountOption({
+  selected,
+  icon,
+  title,
+  description,
+  onSelect,
+}: {
+  selected: boolean;
+  icon: string;
+  title: string;
+  description: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={onSelect}
+      className={`flex w-full items-start gap-4 rounded-2xl border-2 p-4 text-left transition ${
+        selected
+          ? "border-[#A4543A] bg-[#FFF6F0] shadow-[0_6px_18px_rgba(164,84,58,0.12)]"
+          : "border-[#EBDCD1] bg-white hover:border-[#D9B7A5]"
+      }`}
+    >
+      <span
+        className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${
+          selected
+            ? "bg-gradient-to-br from-[#CB8969] to-[#994D35] text-white"
+            : "bg-[#F8EEE8] text-[#A4543A]"
+        }`}
+      >
+        <Icon d={icon} className="h-6 w-6" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-extrabold text-[#30231E]">
+          {title}
+        </span>
+        <span className="mt-1 block text-xs leading-5 text-[#80695D]">
+          {description}
+        </span>
+      </span>
+      <span
+        className={`mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 ${
+          selected
+            ? "border-[#A4543A] bg-[#A4543A] text-white"
+            : "border-[#D9C5B8] bg-white text-transparent"
+        }`}
+      >
+        <Icon d={ICONS.check} className="h-3.5 w-3.5" />
+      </span>
+    </button>
+  );
+}
+
+/**
+ * One archived post shown with the real feed card (same header, image, caption,
+ * likes and buttons). The three-dot menu on the post has "Show on profile".
+ * Top bar: back arrow (to the archived grid) and X (closes everything).
+ */
+function ArchivedPostViewer({
+  ownerId,
+  postId,
+  onBack,
+  onClose,
+  onArchivedChange,
+  onRemoved,
+}: {
+  ownerId: string;
+  postId: string;
+  onBack: () => void;
+  onClose: () => void;
+  onArchivedChange: (postId: string, archived: boolean) => void;
+  onRemoved: (postId: string) => void;
+}) {
+  const [post, setPost] = useState<PostData | null>(null);
+  const [viewer, setViewer] = useState<PostPerson | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async () => {
+      setLoading(true);
+      setError("");
+
+      try {
+        const result = await getPost(ownerId, postId);
+        if (cancelled) return;
+        setPost(result.post);
+        setViewer(result.viewer);
+      } catch (err: unknown) {
+        if (!cancelled) setError(errMsg(err, "Unable to load this post."));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [ownerId, postId]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[160] flex items-end justify-center bg-[#2D1D16]/60 p-0 backdrop-blur-sm sm:items-center sm:p-5"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label="Archived post"
+        className="flex max-h-[92dvh] w-full max-w-[640px] flex-col overflow-hidden rounded-t-[30px] border border-[#EBDCD1] bg-[#FAF8F6] shadow-2xl sm:rounded-[30px]"
+      >
+        <div className="flex items-center gap-3 border-b border-[#F0E3DA] bg-[#FFFCF9] px-4 py-3.5 sm:px-5">
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Back to archived posts"
+            className={roundIconButtonClass}
+          >
+            <Icon d={ICONS.arrowLeft} className="h-5 w-5" />
+          </button>
+
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <h2 className="truncate text-base font-black text-[#30231E]">
+              Archived post
+            </h2>
+            <span className="inline-flex items-center gap-1 rounded-full bg-[#F4E7DE] px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-[#985438]">
+              <Icon d={ICONS.archive} className="h-3 w-3" />
+              Archived
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className={`${roundIconButtonClass} text-2xl`}
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5">
+          {loading && (
+            <div className="animate-pulse overflow-hidden rounded-2xl border border-[#eee4dd] bg-white">
+              <div className="h-16 bg-[#f4efeb]" />
+              <div className="aspect-[4/3] bg-[#f0e9e4]" />
+              <div className="h-24 bg-[#f8f4f1]" />
+            </div>
+          )}
+
+          {!loading && error && (
+            <div className="rounded-2xl border border-[#efdbd4] bg-white px-6 py-10 text-center">
+              <h3 className="text-base font-bold text-[#30231E]">
+                This post isn't available
+              </h3>
+              <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[#8b7a70]">
+                {error}
+              </p>
+            </div>
+          )}
+
+          {!loading && !error && post && viewer && (
+            <PostCard
+              key={post.postId}
+              initialPost={post}
+              viewer={viewer}
+              unarchiveLabel="Show on profile"
+              onArchivedChange={onArchivedChange}
+              onRemoved={onRemoved}
+            />
+          )}
+        </div>
       </section>
     </div>
   );
@@ -863,6 +1167,14 @@ const Profile = () => {
     message: string;
   } | null>(null);
 
+  // Settings (account type + archived posts)
+  const [settingsView, setSettingsView] = useState<SettingsView | null>(null);
+  const [accountChoice, setAccountChoice] = useState<AccountChoice>("public");
+  const [accountSaving, setAccountSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  const [settingsNotice, setSettingsNotice] = useState("");
+  const [archivedViewId, setArchivedViewId] = useState("");
+
   // Uploads
   const [uploadingProfile, setUploadingProfile] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
@@ -1014,6 +1326,133 @@ const Profile = () => {
     const id = window.setTimeout(() => setNotice(""), 4000);
     return () => window.clearTimeout(id);
   }, [notice]);
+
+  // Settings messages dismiss themselves too.
+  useEffect(() => {
+    if (!settingsNotice) return;
+    const id = window.setTimeout(() => setSettingsNotice(""), 4000);
+    return () => window.clearTimeout(id);
+  }, [settingsNotice]);
+
+  // ---------------- Settings ----------------
+
+  const openSettings = () => {
+    setSettingsError("");
+    setSettingsNotice("");
+    setArchivedViewId("");
+    setSettingsView("menu");
+  };
+
+  const closeSettings = () => {
+    if (accountSaving) return;
+    setSettingsView(null);
+    setArchivedViewId("");
+    setSettingsError("");
+    setSettingsNotice("");
+  };
+
+  // Back arrow: returns to the first settings screen without saving anything.
+  const goToSettingsMenu = () => {
+    if (accountSaving) return;
+    setSettingsError("");
+    setSettingsNotice("");
+    setArchivedViewId("");
+    setSettingsView("menu");
+  };
+
+  const openAccountSettings = () => {
+    if (!profile) return;
+    setAccountChoice(profile.isPrivate ? "private" : "public");
+    setSettingsError("");
+    setSettingsNotice("");
+    setSettingsView("account");
+  };
+
+  const openArchived = () => {
+    setSettingsError("");
+    setSettingsNotice("");
+    setArchivedViewId("");
+    setSettingsView("archived");
+  };
+
+  const saveAccountType = async () => {
+    if (!profile || accountSaving) return;
+
+    const nextPrivate = accountChoice === "private";
+
+    if (nextPrivate === Boolean(profile.isPrivate)) {
+      setSettingsNotice("");
+      setSettingsError("Your account is already set to this type.");
+      return;
+    }
+
+    setAccountSaving(true);
+    setSettingsError("");
+    setSettingsNotice("");
+
+    try {
+      const response = await profileService.updateMyProfile({
+        isPrivate: nextPrivate,
+      });
+
+      // Saved in the database; mirror it on the page straight away.
+      const saved = Boolean(response.data.profile.isPrivate);
+      patchProfile({ isPrivate: saved });
+      setIsPrivate(saved);
+      setAccountChoice(saved ? "private" : "public");
+      setSettingsNotice(
+        saved ? "Your account is now private." : "Your account is now public.",
+      );
+    } catch (err: unknown) {
+      setSettingsError(errMsg(err, "Unable to update your account type."));
+    } finally {
+      setAccountSaving(false);
+    }
+  };
+
+  // A post was archived / unarchived from inside the archived viewer.
+  const handlePostArchivedChange = (postId: string, archived: boolean) => {
+    setProfile((previous) =>
+      previous
+        ? {
+            ...previous,
+            posts: (previous.posts ?? []).map((item) =>
+              item &&
+              typeof item === "object" &&
+              (item as Record<string, unknown>).postId === postId
+                ? { ...(item as Record<string, unknown>), archived }
+                : item,
+            ),
+          }
+        : previous,
+    );
+
+    if (!archived) {
+      setArchivedViewId("");
+      setSettingsNotice("Post is back on your profile.");
+    }
+  };
+
+  // A post was deleted from inside the archived viewer.
+  const handlePostRemoved = (postId: string) => {
+    setProfile((previous) =>
+      previous
+        ? {
+            ...previous,
+            posts: (previous.posts ?? []).filter(
+              (item) =>
+                !(
+                  item &&
+                  typeof item === "object" &&
+                  (item as Record<string, unknown>).postId === postId
+                ),
+            ),
+          }
+        : previous,
+    );
+    setArchivedViewId("");
+    setSettingsNotice("Post deleted.");
+  };
 
   // ---------------- Username availability ----------------
 
@@ -1251,6 +1690,13 @@ const Profile = () => {
     if (postId && ownerId) navigate(`/profile/${ownerId}/posts/${postId}`);
   };
 
+  // Archived grid: open the post in the archived viewer instead of navigating.
+  const openArchivedPost = (item: unknown) => {
+    if (!item || typeof item !== "object") return;
+    const postId = (item as Record<string, unknown>).postId;
+    if (typeof postId === "string" && postId) setArchivedViewId(postId);
+  };
+
   const setFriendRelation = (id: string, relationship: Relationship) =>
     setProfile((previous) =>
       previous
@@ -1450,9 +1896,6 @@ const Profile = () => {
     setRingLoading(false);
   };
 
-
-  
-
   // Record the view (user id + email are taken from the login on the server).
   useEffect(() => {
     if (!currentStory || !profile) return;
@@ -1534,11 +1977,16 @@ const Profile = () => {
     ownProfile ? ((profile.requests || []) as IncomingRequest[]) : []
   ).filter((request) => request.accept !== true);
 
-  const posts = profile.posts || [];
+  // Archived posts live in Settings -> Archived, not in the Posts grid.
+  const allPosts = profile.posts || [];
+  const posts = allPosts.filter((item) => !isArchivedPostItem(item));
+  const archivedPosts = ownProfile ? allPosts.filter(isArchivedPostItem) : [];
   const mentions = profile.mentionedPosts || [];
   const saved = profile.savedPosts || [];
   const relationship: Relationship = profile.relationship ?? "none";
-  const postsCount = profile.postsCount ?? posts.length;
+  const postsCount = ownProfile
+    ? posts.length
+    : (profile.postsCount ?? posts.length);
 
   const restricted =
     !ownProfile &&
@@ -1571,6 +2019,9 @@ const Profile = () => {
           usernameStatus.state === "error"
         ? "border-red-300 bg-red-50 text-red-700"
         : "border-[#E6D5C9] bg-[#FFF8F3] text-[#80695D]";
+
+  const accountUnchanged =
+    (accountChoice === "private") === Boolean(profile.isPrivate);
 
   return (
     <main className="min-h-screen bg-[#FBF6F1] pb-8 text-[#30231E]">
@@ -1622,15 +2073,26 @@ const Profile = () => {
           {/* Profile card */}
           <div className="relative flow-root -mt-6 rounded-t-[28px] bg-white px-5 pb-6 sm:px-8">
             {ownProfile && (
-              <button
-                type="button"
-                onClick={openEditor}
-                aria-label="Edit profile"
-                title="Edit profile"
-                className="absolute right-4 top-4 flex h-11 w-11 items-center justify-center rounded-2xl border border-[#E9D2C3] bg-[#FFF8F3] text-[#985438] shadow-sm sm:right-6"
-              >
-                <Icon d={ICONS.pencil} />
-              </button>
+              <div className="absolute right-4 top-4 flex items-center gap-2 sm:right-6">
+                <button
+                  type="button"
+                  onClick={openSettings}
+                  aria-label="Settings"
+                  title="Settings"
+                  className="flex h-11 w-11 items-center justify-center rounded-2xl border border-[#E9D2C3] bg-[#FFF8F3] text-[#985438] shadow-sm transition hover:bg-[#FBEDE3] active:scale-95"
+                >
+                  <Icon d={ICONS.settings} />
+                </button>
+                <button
+                  type="button"
+                  onClick={openEditor}
+                  aria-label="Edit profile"
+                  title="Edit profile"
+                  className="flex h-11 w-11 items-center justify-center rounded-2xl border border-[#E9D2C3] bg-[#FFF8F3] text-[#985438] shadow-sm transition hover:bg-[#FBEDE3] active:scale-95"
+                >
+                  <Icon d={ICONS.pencil} />
+                </button>
+              </div>
             )}
 
             {/* Profile photo with story ring and + button */}
@@ -2034,6 +2496,137 @@ const Profile = () => {
         </section>
       </div>
 
+      {/* ---------------- Settings: menu ---------------- */}
+      {settingsView === "menu" && ownProfile && (
+        <SettingsSheet
+          title="Settings"
+          subtitle="Manage your account and posts"
+          onClose={closeSettings}
+        >
+          <div className="space-y-3">
+            <SettingsRow
+              icon={ICONS.user}
+              title="Account settings"
+              description={`Account type: ${
+                profile.isPrivate ? "Private" : "Public"
+              }. Choose who can see your profile.`}
+              onClick={openAccountSettings}
+            />
+            <SettingsRow
+              icon={ICONS.archive}
+              title="Archived"
+              description={`${archivedPosts.length} archived ${
+                archivedPosts.length === 1 ? "post" : "posts"
+              }. Only you can see them.`}
+              onClick={openArchived}
+            />
+          </div>
+        </SettingsSheet>
+      )}
+
+      {/* ---------------- Settings: account type ---------------- */}
+      {settingsView === "account" && ownProfile && (
+        <SettingsSheet
+          title="Account settings"
+          subtitle="Choose your account type"
+          onBack={goToSettingsMenu}
+          onClose={closeSettings}
+        >
+          <div role="radiogroup" aria-label="Account type" className="space-y-3">
+            <AccountOption
+              selected={accountChoice === "public"}
+              icon={ICONS.globe}
+              title="Public account"
+              description="Anyone on JobDrips can see your profile, posts and stories."
+              onSelect={() => {
+                setSettingsError("");
+                setSettingsNotice("");
+                setAccountChoice("public");
+              }}
+            />
+            <AccountOption
+              selected={accountChoice === "private"}
+              icon={ICONS.lock}
+              title="Private account"
+              description="Only accepted friends can see your posts, stories and details."
+              onSelect={() => {
+                setSettingsError("");
+                setSettingsNotice("");
+                setAccountChoice("private");
+              }}
+            />
+          </div>
+
+          {settingsError && (
+            <p
+              role="alert"
+              className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700"
+            >
+              {settingsError}
+            </p>
+          )}
+          {settingsNotice && !settingsError && (
+            <p
+              role="status"
+              className="mt-4 rounded-xl bg-green-50 p-3 text-sm text-green-700"
+            >
+              {settingsNotice}
+            </p>
+          )}
+
+          <button
+            type="button"
+            disabled={accountSaving || accountUnchanged}
+            onClick={() => void saveAccountType()}
+            className="mt-6 w-full rounded-full bg-gradient-to-r from-[#CB8969] to-[#994D35] px-6 py-3.5 font-extrabold text-white shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {accountSaving ? "Saving changes..." : "Save changes"}
+          </button>
+        </SettingsSheet>
+      )}
+
+      {/* ---------------- Settings: archived posts ---------------- */}
+      {settingsView === "archived" && ownProfile && (
+        <SettingsSheet
+          title="Archived"
+          subtitle={`${archivedPosts.length} archived ${
+            archivedPosts.length === 1 ? "post" : "posts"
+          }`}
+          onBack={goToSettingsMenu}
+          onClose={closeSettings}
+        >
+          {settingsNotice && (
+            <p
+              role="status"
+              className="mb-3 rounded-xl bg-green-50 p-3 text-sm text-green-700"
+            >
+              {settingsNotice}
+            </p>
+          )}
+          <div className="-mx-4 overflow-hidden sm:-mx-6">
+            <PostGrid
+              items={archivedPosts}
+              onOpen={openArchivedPost}
+              emptyTitle="No archived posts"
+              emptyText="Posts you archive are kept here. Only you can see them."
+            />
+          </div>
+        </SettingsSheet>
+      )}
+
+      {/* ---------------- Settings: one archived post (feed card) ---------------- */}
+      {settingsView === "archived" && ownProfile && archivedViewId && (
+        <ArchivedPostViewer
+          key={archivedViewId}
+          ownerId={profile.userid}
+          postId={archivedViewId}
+          onBack={() => setArchivedViewId("")}
+          onClose={closeSettings}
+          onArchivedChange={handlePostArchivedChange}
+          onRemoved={handlePostRemoved}
+        />
+      )}
+
       {/* ---------------- Edit profile ---------------- */}
       {editorOpen && ownProfile && (
         <Sheet
@@ -2386,7 +2979,7 @@ const Profile = () => {
       )}
 
       {/* ---------------- Remove friend confirmation ---------------- */}
-           <ConfirmModal
+      <ConfirmModal
         open={removeOpen && !ownProfile}
         tone="danger"
         busy={removing}
@@ -2443,7 +3036,7 @@ const Profile = () => {
       )}
 
       {/* ---------------- Story viewer ---------------- */}
-           {storyViewerOpen && activeStories.length > 0 && (
+      {storyViewerOpen && activeStories.length > 0 && (
         <StoryViewer
           person={{
             userid: profile.userid,
@@ -2461,7 +3054,6 @@ const Profile = () => {
             });
             setNotice("Story deleted.");
           }}
-         
         />
       )}
     </main>

@@ -5,6 +5,7 @@ import {
   Bookmark,
   ChevronLeft,
   ChevronRight,
+  Eye,
   Flag,
   MessageCircle,
   MessageSquare,
@@ -35,6 +36,10 @@ interface Props {
   viewer: PostPerson;
   /** Called when the post is deleted or reported (so the page can drop it). */
   onRemoved?: (postId: string) => void;
+  /** Called after the post was archived / unarchived successfully. */
+  onArchivedChange?: (postId: string, archived: boolean) => void;
+  /** Menu text for an archived post (default "Unarchive"). */
+  unarchiveLabel?: string;
 }
 
 const errText = (error: unknown, fallback: string) =>
@@ -69,7 +74,13 @@ function ActionButton({
   );
 }
 
-export default function PostCard({ initialPost, viewer, onRemoved }: Props) {
+export default function PostCard({
+  initialPost,
+  viewer,
+  onRemoved,
+  onArchivedChange,
+  unarchiveLabel,
+}: Props) {
   const navigate = useNavigate();
   const [post, setPost] = useState(initialPost);
   const [imageIndex, setImageIndex] = useState(0);
@@ -177,10 +188,12 @@ export default function PostCard({ initialPost, viewer, onRemoved }: Props) {
 
   const toggleArchive = async () => {
     setMenuOpen(false);
+    const nextArchived = !post.archived;
 
     try {
-      await archivePost(post.userid, post.postId, !post.archived);
-      update((current) => ({ ...current, archived: !current.archived }));
+      await archivePost(post.userid, post.postId, nextArchived);
+      update((current) => ({ ...current, archived: nextArchived }));
+      onArchivedChange?.(post.postId, nextArchived);
     } catch (err: unknown) {
       setError(errText(err, "Unable to archive this post."));
     }
@@ -205,6 +218,8 @@ export default function PostCard({ initialPost, viewer, onRemoved }: Props) {
 
   const menuItem =
     "flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm font-semibold text-[#49352b] hover:bg-[#f8f1ec]";
+
+  const archiveMenuText = post.archived ? (unarchiveLabel ?? "Unarchive") : "Archive";
 
   return (
     <article className="overflow-hidden rounded-2xl border border-[#eee4dd] bg-white shadow-[0_5px_24px_rgba(67,43,29,0.045)]">
@@ -291,7 +306,8 @@ export default function PostCard({ initialPost, viewer, onRemoved }: Props) {
                       <Pencil size={16} /> Edit
                     </button>
                     <button type="button" className={menuItem} onClick={() => void toggleArchive()}>
-                      <Archive size={16} /> {post.archived ? "Unarchive" : "Archive"}
+                      {post.archived && unarchiveLabel ? <Eye size={16} /> : <Archive size={16} />}{" "}
+                      {archiveMenuText}
                     </button>
                     <button
                       type="button"

@@ -237,6 +237,30 @@ export interface UsernameAvailabilityResponse {
   };
 }
 
+/** One archived post as shown in the settings -> Archived grid. */
+export interface ArchivedPost {
+  postId: string;
+  userid: string;
+  createdAt: string | null;
+  archived: true;
+  visibility: string;
+  caption: string;
+  imageUrls: string[];
+  likeCount: number;
+}
+
+export interface ArchivedPostsResponse {
+  success: boolean;
+  message?: string;
+  data: { posts: ArchivedPost[] };
+}
+
+export interface SetPostArchivedResponse {
+  success: boolean;
+  message: string;
+  data: { postId: string; archived: boolean };
+}
+
 async function requestJson<T>(
   url: string,
   options: RequestInit = {},
@@ -430,6 +454,25 @@ export const profileService = {
     return profileRequest<DeleteStoryResponse>(
       `/me/stories/${encodeURIComponent(storyId)}`,
       { method: "DELETE" },
+    );
+  },
+
+  /** My archived posts (settings -> Archived). */
+  getArchivedPosts(): Promise<ArchivedPostsResponse> {
+    return profileRequest<ArchivedPostsResponse>("/me/archived-posts");
+  },
+
+  /** archived=false puts the post back on the profile ("Show on profile"). */
+  setPostArchived(
+    postId: string,
+    archived: boolean,
+  ): Promise<SetPostArchivedResponse> {
+    return profileRequest<SetPostArchivedResponse>(
+      `/me/posts/${encodeURIComponent(postId)}/archive`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ archived }),
+      },
     );
   },
 };
