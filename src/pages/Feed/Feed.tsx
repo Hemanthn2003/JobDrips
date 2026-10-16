@@ -17,9 +17,6 @@ interface PendingFeed {
   freshCount: number;
 }
 
-/** Background refresh: when the tab is visible, at most this often. */
-const REFRESH_MIN_GAP_MS = 20_000;
-const REFRESH_EVERY_MS = 60_000;
 /** Scrolled further than this = don't move the page, show the "new posts" button. */
 const SCROLLED_DOWN_PX = 300;
 
@@ -43,15 +40,15 @@ const Feed = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const reloadTimer = useRef<number | undefined>(undefined);
-  const lastSocketReload = useRef(0);
-  const lastLoad = useRef(0);
   const inFlightLoad = useRef<Promise<void> | null>(null);
-  const viewerRef = useRef<PostPerson | null>(null);
+  const refreshAfterLoad = useRef(false);
+  const loadFeedRef = useRef<(silent?: boolean) => Promise<void>>(
+    () => Promise.resolve(),
+  );
   const postsRef = useRef<FeedPost[]>([]);
   useEffect(() => {
-    viewerRef.current = viewer;
     postsRef.current = posts;
-  }, [viewer, posts]);
+  }, [posts]);
 
   // silent = refresh in the background (no skeleton, errors ignored).
   const loadFeed = useCallback((silent = false): Promise<void> => {
@@ -61,7 +58,6 @@ const Feed = () => {
       try {
         const result = await getFeed();
         const incoming = result.posts as FeedPost[];
-        lastLoad.current = Date.now();
         if (!silent) setError("");
 
         if (silent) {
@@ -98,14 +94,30 @@ const Feed = () => {
     inFlightLoad.current = pendingLoad;
     void pendingLoad.then(
       () => {
-        if (inFlightLoad.current === pendingLoad) inFlightLoad.current = null;
+        if (inFlightLoad.current === pendingLoad) {
+          inFlightLoad.current = null;
+          if (refreshAfterLoad.current) {
+            refreshAfterLoad.current = false;
+            void loadFeedRef.current(true);
+          }
+        }
       },
       () => {
-        if (inFlightLoad.current === pendingLoad) inFlightLoad.current = null;
+        if (inFlightLoad.current === pendingLoad) {
+          inFlightLoad.current = null;
+          if (refreshAfterLoad.current) {
+            refreshAfterLoad.current = false;
+            void loadFeedRef.current(true);
+          }
+        }
       },
     );
     return pendingLoad;
   }, []);
+
+  useEffect(() => {
+    loadFeedRef.current = loadFeed;
+  }, [loadFeed]);
 
   useEffect(() => {
     void loadFeed();
@@ -113,38 +125,27 @@ const Feed = () => {
 
   useEffect(() => () => window.clearTimeout(reloadTimer.current), []);
 
-  // Coming back to the tab (or leaving the feed open) picks up new posts.
-  useEffect(() => {
-    const refresh = () => {
-      if (document.visibilityState !== "visible") return;
-      if (Date.now() - lastLoad.current < REFRESH_MIN_GAP_MS) return;
-      void loadFeed(true);
-    };
-
-    document.addEventListener("visibilitychange", refresh);
-    window.addEventListener("focus", refresh);
-    const timer = window.setInterval(refresh, REFRESH_EVERY_MS);
-
-    return () => {
-      document.removeEventListener("visibilitychange", refresh);
-      window.removeEventListener("focus", refresh);
-      window.clearInterval(timer);
-    };
-  }, [loadFeed]);
-
-  // Live updates: another person liked, commented, saved, shared, edited,
-  // archived or deleted a post (or published a new one).
-  useSocketEvent<{ actorId?: string }>("post:updated", (payload) => {
-    const me = (viewerRef.current as unknown as { userid?: string } | null)?.userid;
-    // My own actions are already shown instantly on screen.
-    if (me && payload?.actorId === me) return;
+  // New posts may enter this viewer's feed; changes to existing feed posts
+  // only refresh this feed when that post is already present.
+  useSocketEvent<{
+    ownerId?: string;
+    postId?: string;
+    action?: string;
+  }>("feed:updated", (payload) => {
+    const isNewPost = payload?.action === "create";
+    const isInFeed = postsRef.current.some(
+      (post) => post.userid === payload?.ownerId && post.postId === payload?.postId,
+    );
+    if (!isNewPost && !isInFeed) return;
 
     window.clearTimeout(reloadTimer.current);
     reloadTimer.current = window.setTimeout(() => {
-      if (Date.now() - lastSocketReload.current < 1_500) return;
-      lastSocketReload.current = Date.now();
-      void loadFeed(true);
-    }, 500);
+      if (inFlightLoad.current) {
+        refreshAfterLoad.current = true;
+      } else {
+        void loadFeed(true);
+      }
+    }, 350);
   });
 
   const showPending = () => {

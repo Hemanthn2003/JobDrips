@@ -426,6 +426,8 @@ export const createPost = async (req: Request, res: Response) => {
     );
  
     uploaded.length = 0; // success: keep the Cloudinary assets
+    res.locals.postOwnerId = userId;
+    res.locals.postId = post.postId;
     res.status(201).json({ post });
   } catch (err) {
     // Roll back anything we already pushed to Cloudinary.

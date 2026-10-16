@@ -43,6 +43,10 @@ export const emitToUser = (userId: string, event: string, payload: unknown): voi
   io?.to(`user:${userId}`).emit(event, payload);
 };
 
+export const emitToAllUsers = (event: string, payload: unknown): void => {
+  io?.emit(event, payload);
+};
+
 export const emitToConversation = (conversationId: string, event: string, payload: unknown): void => {
   io?.to(`conversation:${conversationId}`).emit(event, payload);
 };

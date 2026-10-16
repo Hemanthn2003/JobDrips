@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import Profile from "../models/Profile.js";
 import type { AuthenticatedRequest } from "./authMiddleware.js";
 import { acceptedFriendIds } from "./postHelpers.js";
-import { emitToUser } from "./realtime.js";
+import { emitToAllUsers, emitToUser } from "./realtime.js";
 
 /**
  * Route middlewares that broadcast a "something changed" signal after a
@@ -51,17 +51,24 @@ export const emitStoryChange = (req: Request, res: Response, next: NextFunction)
 export const emitPostChange = (req: Request, res: Response, next: NextFunction) => {
   afterSuccess(res, async () => {
     const actorId = actorOf(req);
-    const ownerId = String(req.params.ownerId || actorId);
+    const ownerId = String(res.locals.postOwnerId || req.params.ownerId || actorId);
     if (!ownerId) return;
-    const friends = await friendsOf(ownerId);
-    emitAll([ownerId, actorId, ...friends], "post:updated", {
+    const isComposerCreate =
+      req.method === "POST" &&
+      req.baseUrl.endsWith("/post-composer") &&
+      !req.params.postId;
+    const action = isComposerCreate ? "create" : req.method.toLowerCase();
+    const payload = {
       ownerId,
       actorId,
-      postId: String(req.params.postId || ""),
+      postId: String(res.locals.postId || req.params.postId || ""),
       commentId: String(req.params.commentId || ""),
-      action: req.method.toLowerCase(),
+      action,
       at: new Date().toISOString(),
-    });
+    };
+    const friends = await friendsOf(ownerId);
+    emitAll([ownerId, actorId, ...friends], "post:updated", payload);
+    emitToAllUsers("feed:updated", payload);
   });
   next();
 };
