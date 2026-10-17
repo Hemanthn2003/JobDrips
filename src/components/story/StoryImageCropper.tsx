@@ -103,6 +103,17 @@ const loadImage = (url: string) =>
     image.src = url;
   });
 
+const readImageFile = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      typeof reader.result === "string"
+        ? resolve(reader.result)
+        : reject(new Error("This image can't be opened."));
+    reader.onerror = () => reject(new Error("This image can't be opened."));
+    reader.readAsDataURL(file);
+  });
+
 const toBlob = (canvas: HTMLCanvasElement, type: string, quality?: number) =>
   new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, quality));
 
@@ -139,20 +150,25 @@ export default function StoryImageCropper({ file, initial, onCancel, onDone }: P
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const workRef = useRef<HTMLImageElement | HTMLCanvasElement | null>(null);
-  const objectUrl = useRef("");
+  const sourceUrl = useRef("");
   const rotatedUrl = useRef("");
   const drag = useRef<{ id: HandleId; x: number; y: number; rect: CropRect } | null>(null);
 
   // Load the picked file.
   useEffect(() => {
     let alive = true;
-    objectUrl.current = URL.createObjectURL(file);
-    loadImage(objectUrl.current)
-      .then((loaded) => { if (alive) setImage(loaded); })
+    setImage(null);
+    setLoadError("");
+    void readImageFile(file)
+      .then((url) => {
+        if (!alive) return;
+        sourceUrl.current = url;
+        return loadImage(url);
+      })
+      .then((loaded) => { if (alive && loaded) setImage(loaded); })
       .catch((e: unknown) => { if (alive) setLoadError(e instanceof Error ? e.message : "This image can't be opened."); });
     return () => {
       alive = false;
-      URL.revokeObjectURL(objectUrl.current);
       if (rotatedUrl.current) URL.revokeObjectURL(rotatedUrl.current);
     };
   }, [file]);
@@ -165,7 +181,7 @@ export default function StoryImageCropper({ file, initial, onCancel, onDone }: P
 
     if (rotation === 0) {
       workRef.current = image;
-      setWorkUrl(objectUrl.current);
+      setWorkUrl(sourceUrl.current);
       return;
     }
     const canvas = rotateToCanvas(image, rotation);
