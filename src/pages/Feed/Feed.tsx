@@ -175,7 +175,7 @@ const Feed = () => {
 
       {/* Mobile: no side padding, cards touch both screen edges.
           Larger screens: normal side padding. */}
-      <div className="w-full px-0 py-3 sm:px-6 sm:py-5 lg:px-8">
+      <div className="mx-auto w-full max-w-[688px] px-0 py-3 sm:px-6 sm:py-5">
         {loading && (
           <div className="w-full space-y-3 sm:space-y-5">
             {[1, 2].map((item) => (

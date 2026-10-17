@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Archive,
@@ -187,6 +188,23 @@ export default function PostCard({
     } else {
       lastTap.current = now;
     }
+  };
+
+  const handleVideoDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - bounds.left;
+    const y = event.clientY - bounds.top;
+    if (
+      x < bounds.width * 0.25 ||
+      x > bounds.width * 0.75 ||
+      y < bounds.height * 0.25 ||
+      y > bounds.height * 0.75
+    ) return;
+    lastTap.current = 0;
+    if (!post.liked) triggerBurst();
+    void applyLike(true);
   };
 
   const handleCarouselScroll = () => {
@@ -436,21 +454,45 @@ export default function PostCard({
 
       {/* Video */}
       {post.videoUrl && (
-        <div className="relative w-full overflow-hidden bg-black">
+        <div
+          className="relative w-full overflow-hidden bg-black"
+          onDoubleClickCapture={handleVideoDoubleClick}
+        >
           <video
             src={post.videoUrl}
             controls
             playsInline
             muted={videoMuted}
             poster={post.videoMeta?.thumbnailUrl}
-            className="max-h-[600px] w-full bg-black object-contain"
+            className="max-h-[600px] w-full bg-transparent object-contain"
           />
+          <div
+            aria-hidden="true"
+            className="absolute inset-1/4 z-10 cursor-pointer bg-transparent"
+            onClick={handleImageClick}
+            onDoubleClick={handleVideoDoubleClick}
+          />
+          {burst > 0 && (
+            <img
+              key={burst}
+              src={MEDAL_ACTIVE_ICON}
+              alt=""
+              aria-hidden="true"
+              className="pointer-events-none absolute left-1/2 top-1/2 z-10 -ml-16 -mt-16 h-32 w-32"
+              style={{
+                animation: "jd-medal-pop 1s ease-out forwards",
+                background: "none",
+                boxShadow: "none",
+                filter: "none",
+              }}
+            />
+          )}
           <button
             type="button"
             aria-label={videoMuted ? "Unmute video" : "Mute video"}
             aria-pressed={!videoMuted}
             onClick={() => setVideoMuted((muted) => !muted)}
-            className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/65 text-white shadow backdrop-blur transition hover:bg-black/80"
+            className="absolute right-3 top-3 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-black/65 text-white shadow backdrop-blur transition hover:bg-black/80"
           >
             {videoMuted ? <VolumeX size={19} /> : <Volume2 size={19} />}
           </button>

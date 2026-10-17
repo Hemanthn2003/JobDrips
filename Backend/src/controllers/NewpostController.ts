@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import type { UploadApiResponse } from "cloudinary";
 import cloudinary from "../config/cloudinary.js";
 import Hashtag from "../models/Hashtag.js";
 import Profile from "../models/Profile.js";
@@ -298,10 +299,26 @@ export const createPost = async (req: Request, res: Response) => {
     }
  
     if (video) {
-      const r: any = await cloudinary.uploader.upload_large(video.path, {
-        folder,
-        resource_type: "video",
-        chunk_size: 6_000_000,
+      const r = await new Promise<UploadApiResponse>((resolve, reject) => {
+        cloudinary.uploader.upload_large(
+          video.path,
+          {
+            folder,
+            resource_type: "video",
+            chunk_size: 6_000_000,
+          },
+          (error, result) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            if (!result) {
+              reject(new Error("Cloudinary returned no video upload result."));
+              return;
+            }
+            resolve(result);
+          },
+        );
       });
       uploaded.push({ publicId: r.public_id, type: "video" });
  

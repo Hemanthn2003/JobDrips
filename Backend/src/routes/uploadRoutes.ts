@@ -1,8 +1,9 @@
 
 import { Router } from "express";
 import multer from "multer";
+import { tmpdir } from "node:os";
 import { authenticate } from "../utils/authMiddleware.js";
-import { uploadImage } from "../controllers/uploadController.js";
+import { uploadImage, uploadVideo } from "../controllers/uploadController.js";
 
 const router = Router();
 
@@ -65,6 +66,64 @@ router.post(
     });
   },
   uploadImage
+);
+
+// Story videos are written to disk so large uploads do not consume equivalent RAM.
+// The selected story clip is capped at 60 seconds and uploaded up to 200 MB.
+const allowedVideoMimeTypes = new Set([
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+]);
+
+const videoUpload = multer({
+  dest: tmpdir(),
+  limits: {
+    fileSize: 200 * 1024 * 1024,
+    files: 1,
+  },
+  fileFilter: (_request, file, callback) => {
+    if (!allowedVideoMimeTypes.has(file.mimetype)) {
+      callback(new Error("Only MP4, WebM, and MOV videos are allowed."));
+      return;
+    }
+
+    callback(null, true);
+  },
+});
+
+router.post(
+  "/video",
+  authenticate,
+  (request, response, next) => {
+    videoUpload.single("video")(request, response, (error) => {
+      if (!error) {
+        next();
+        return;
+      }
+
+      if (error instanceof multer.MulterError) {
+        const isTooLarge = error.code === "LIMIT_FILE_SIZE";
+
+        response.status(isTooLarge ? 413 : 400).json({
+          success: false,
+          message: isTooLarge
+            ? "Video must be 200 MB or smaller."
+            : "Invalid video upload.",
+        });
+        return;
+      }
+
+      response.status(400).json({
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Invalid video upload.",
+      });
+    });
+  },
+  uploadVideo
 );
 
 export default router;

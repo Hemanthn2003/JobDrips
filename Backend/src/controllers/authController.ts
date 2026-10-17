@@ -9,6 +9,7 @@ import {
   createAccessToken,
   createRefreshToken,
   generateOtp,
+  getAccessTokenCookieName,
   getRefreshTokenCookieName,
   hashPassword,
   hashValue,
@@ -722,35 +723,40 @@ export const logout = async (
   response: Response
 ) => {
   try {
-    const refreshToken =
-      request.cookies[
-        getRefreshTokenCookieName()
-      ];
+    const refreshToken = request.cookies?.[getRefreshTokenCookieName()];
+    const accessToken = request.cookies?.[getAccessTokenCookieName()];
+    let userId: string | undefined;
 
-    if (refreshToken) {
-      const secret =
-        process.env.JWT_REFRESH_SECRET;
-
-      if (secret) {
-        try {
-          const payload =
-            jwt.verify(
-              refreshToken,
-              secret
-            ) as jwt.JwtPayload;
-
-          if (payload.sub) {
-            await User.findByIdAndUpdate(
-              payload.sub,
-              {
-                refreshTokenHash: null,
-              }
-            );
-          }
-        } catch {
-          // Token may already be expired.
+    if (refreshToken && process.env.JWT_REFRESH_SECRET) {
+      try {
+        const payload = jwt.verify(
+          refreshToken,
+          process.env.JWT_REFRESH_SECRET
+        ) as jwt.JwtPayload;
+        if (payload.type === "refresh" && typeof payload.sub === "string") {
+          userId = payload.sub;
         }
+      } catch {
+        // An expired refresh token can still be revoked using the access cookie.
       }
+    }
+
+    if (!userId && accessToken && process.env.JWT_ACCESS_SECRET) {
+      try {
+        const payload = jwt.verify(
+          accessToken,
+          process.env.JWT_ACCESS_SECRET
+        ) as jwt.JwtPayload;
+        if (payload.type === "access" && typeof payload.sub === "string") {
+          userId = payload.sub;
+        }
+      } catch {
+        // Invalid or expired cookies are still cleared below.
+      }
+    }
+
+    if (userId) {
+      await User.findByIdAndUpdate(userId, { refreshTokenHash: null });
     }
 
     clearAuthCookies(response);
@@ -760,11 +766,9 @@ export const logout = async (
         "Logged out successfully.",
     });
   } catch (error) {
-    clearAuthCookies(response);
-
-    return response.json({
-      message:
-        "Logged out successfully.",
+    console.error("Logout failed while revoking the session:", error);
+    return response.status(500).json({
+        message: "Unable to revoke the session. Please try again.",
     });
   }
 };

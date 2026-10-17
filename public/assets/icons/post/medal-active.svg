@@ -38,15 +38,9 @@
       <stop stop-color="#FFFFFF" stop-opacity=".9"/>
       <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
-    <filter id="shadow" x="60" y="10" width="400" height="500" filterUnits="userSpaceOnUse">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="7"/>
-      <feOffset dy="7"/>
-      <feComponentTransfer><feFuncA type="linear" slope=".25"/></feComponentTransfer>
-      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
     <clipPath id="rimClip"><circle cx="256" cy="194" r="145"/></clipPath>
   </defs>
-  <g filter="url(#shadow)">
+  <g>
     <path d="M164 282 113 452 190 426 219 494 266 328Z" fill="url(#ribbonL)" stroke="#D00A19" stroke-width="2" stroke-linejoin="round"/>
     <path d="M348 282 399 452 322 426 293 494 246 328Z" fill="url(#ribbonR)" stroke="#D00A19" stroke-width="2" stroke-linejoin="round"/>
     <path d="m164 312-34 118 52-17 22 45 31-110-71-36Z" fill="#FFAAAA" opacity=".2"/>

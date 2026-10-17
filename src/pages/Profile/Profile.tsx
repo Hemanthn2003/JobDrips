@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { authService } from "../../services/authService";
 import { profileService } from "../../services/profileService";
 import { MessageSheet } from "../../components/post/PostSheets";
 import StoryViewer from "../../components/story/StoryViewer";
+import { useAddStory } from "../../components/story/useAddStory";
 import PostCard from "../../components/post/PostCard";
 import { getPost } from "../../services/postService";
 import type { PostData, PostPerson } from "../../services/postService";
@@ -30,7 +32,7 @@ const RING_LOADING_MS = 1500;
 const USERNAME_PATTERN = /^[a-zA-Z0-9_.]{3,30}$/;
 
 type Tab = "posts" | "mentions" | "saved";
-type ImageKind = "profile" | "cover" | "story";
+type ImageKind = "profile" | "cover";
 type SettingsView = "menu" | "account" | "archived";
 type AccountChoice = "public" | "private";
 
@@ -59,6 +61,7 @@ const ICONS = {
     "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z M3 12h18 M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18",
   check: "m5 12 5 5 9-10",
   user: "M20 21a8 8 0 0 0-16 0 M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z",
+  logout: "M10 17l5-5-5-5 M15 12H3 M12 3h6a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-6",
 } as const;
 
 const inputClass =
@@ -365,17 +368,20 @@ function SettingsRow({
   title,
   description,
   onClick,
+  disabled = false,
 }: {
   icon: string;
   title: string;
   description: string;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="group flex w-full items-center gap-4 rounded-2xl border border-[#EBDCD1] bg-white p-4 text-left shadow-[0_2px_10px_rgba(103,62,42,0.04)] transition hover:border-[#D9B7A5] hover:shadow-[0_6px_18px_rgba(103,62,42,0.09)] active:scale-[0.99]"
+      disabled={disabled}
+      className="group flex w-full items-center gap-4 rounded-2xl border border-[#EBDCD1] bg-white p-4 text-left shadow-[0_2px_10px_rgba(103,62,42,0.04)] transition hover:border-[#D9B7A5] hover:shadow-[0_6px_18px_rgba(103,62,42,0.09)] active:scale-[0.99] disabled:cursor-wait disabled:opacity-60"
     >
       <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#F8EEE8] to-[#EBCDBB] text-[#A4543A]">
         <Icon d={icon} className="h-6 w-6" />
@@ -1038,6 +1044,37 @@ function ExperienceEditor({
 // Posts (image grid)
 // --------------------------------------------------
 
+const videoThumbnailForPost = (
+  videoUrl: string,
+  thumbnailUrl: string | undefined,
+  postId: string,
+  startTime: number,
+  duration: number,
+): string => {
+  let seed = 0;
+  for (const char of postId) seed = (seed * 31 + char.charCodeAt(0)) >>> 0;
+  const offset = Math.max(0, startTime) + (0.15 + (seed / 0xffffffff) * 0.7) * Math.max(0, duration);
+  try {
+    const source = new URL(videoUrl);
+    const uploadPath = "/video/upload/";
+    const uploadIndex = source.pathname.indexOf(uploadPath);
+    if (uploadIndex < 0) return thumbnailUrl || "";
+
+    const afterUpload = source.pathname.slice(uploadIndex + uploadPath.length).split("/");
+    const versionIndex = afterUpload.findIndex((segment) => /^v\d+$/i.test(segment));
+    if (versionIndex < 0) return thumbnailUrl || "";
+
+    const resource = afterUpload.slice(versionIndex).join("/")
+      .replace(/\.(?:mp4|webm|mov)$/i, ".jpg");
+    source.pathname =
+      `${source.pathname.slice(0, uploadIndex)}${uploadPath}` +
+      `so_${offset.toFixed(2)},w_640,h_640,c_fill,q_auto/${resource}`;
+    return source.toString();
+  } catch {
+    return thumbnailUrl || "";
+  }
+};
+
 function PostGrid({
   items,
   emptyTitle,
@@ -1087,6 +1124,22 @@ function PostGrid({
 
         const id =
           typeof record.postId === "string" ? record.postId : `post-${index}`;
+        const videoUrl = typeof record.videoUrl === "string" ? record.videoUrl : "";
+        const videoMeta =
+          record.videoMeta && typeof record.videoMeta === "object"
+            ? (record.videoMeta as Record<string, unknown>)
+            : {};
+        const storedThumbnail =
+          typeof videoMeta.thumbnailUrl === "string"
+            ? videoMeta.thumbnailUrl
+            : undefined;
+        const startTime =
+          typeof videoMeta.startTime === "number" ? videoMeta.startTime : 0;
+        const videoDuration =
+          typeof videoMeta.duration === "number" ? videoMeta.duration : 0;
+        const thumbnail = videoUrl
+          ? videoThumbnailForPost(videoUrl, storedThumbnail, id, startTime, videoDuration)
+          : "";
 
         return (
           <button
@@ -1096,16 +1149,35 @@ function PostGrid({
             aria-label={caption ? `Open post: ${caption.slice(0, 40)}` : "Open post"}
             className="group relative aspect-square overflow-hidden bg-[#F0DFD3]"
           >
-            {images[0] ? (
+            {images[0] || thumbnail ? (
               <img
-                src={images[0]}
+                src={images[0] || thumbnail}
                 alt={caption || "Post"}
                 loading="lazy"
                 className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                onError={(event) => {
+                  if (
+                    videoUrl &&
+                    storedThumbnail &&
+                    event.currentTarget.src !== storedThumbnail
+                  ) {
+                    event.currentTarget.src = storedThumbnail;
+                  }
+                }}
               />
             ) : (
               <span className="flex h-full items-center justify-center p-3 text-center text-xs leading-5 text-[#80533E]">
                 {caption || "Post"}
+              </span>
+            )}
+            {videoUrl && (
+              <span
+                aria-label="Video post"
+                className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/65 text-white"
+              >
+                <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-current">
+                  <path d="M5 3.5a.75.75 0 0 1 1.14-.64l6.2 3.75a1.62 1.62 0 0 1 0 2.78l-6.2 3.75A.75.75 0 0 1 5 12.5z" />
+                </svg>
               </span>
             )}
             {images.length > 1 && (
@@ -1138,7 +1210,6 @@ const Profile = () => {
 
   const profileInputRef = useRef<HTMLInputElement>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
-  const storyInputRef = useRef<HTMLInputElement>(null);
   const reportedViews = useRef<Set<string>>(new Set());
 
   const [profile, setProfile] = useState<ProfileData | null>(null);
@@ -1171,6 +1242,7 @@ const Profile = () => {
   const [settingsView, setSettingsView] = useState<SettingsView | null>(null);
   const [accountChoice, setAccountChoice] = useState<AccountChoice>("public");
   const [accountSaving, setAccountSaving] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [settingsError, setSettingsError] = useState("");
   const [settingsNotice, setSettingsNotice] = useState("");
   const [archivedViewId, setArchivedViewId] = useState("");
@@ -1178,7 +1250,6 @@ const Profile = () => {
   // Uploads
   const [uploadingProfile, setUploadingProfile] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
-  const [uploadingStory, setUploadingStory] = useState(false);
 
   // Overlays
   const [profilePhotoViewerOpen, setProfilePhotoViewerOpen] = useState(false);
@@ -1285,8 +1356,15 @@ const Profile = () => {
   }, [loadProfile]);
   useEffect(() => () => window.clearTimeout(reloadTimer.current), []);
   const viewedProfileId = userid || profile?.userid;
-  useSocketEvent<{ ownerUserId?: string }>("story:updated", (event) => {
-    if (viewedProfileId && event?.ownerUserId === viewedProfileId) reloadSoon();
+  useSocketEvent<{ ownerUserId?: string; actorId?: string; action?: string }>("story:updated", (event) => {
+    const isMyOwnStoryCreate =
+      ownProfile &&
+      event?.ownerUserId === profile?.userid &&
+      event?.actorId === profile?.userid &&
+      event?.action === "post";
+    if (!isMyOwnStoryCreate && viewedProfileId && event?.ownerUserId === viewedProfileId) {
+      reloadSoon();
+    }
   });
   useSocketEvent<{ ownerId?: string }>("post:updated", (event) => {
     if (viewedProfileId && event?.ownerId === viewedProfileId) reloadSoon();
@@ -1344,7 +1422,7 @@ const Profile = () => {
   };
 
   const closeSettings = () => {
-    if (accountSaving) return;
+    if (accountSaving || loggingOut) return;
     setSettingsView(null);
     setArchivedViewId("");
     setSettingsError("");
@@ -1373,6 +1451,19 @@ const Profile = () => {
     setSettingsNotice("");
     setArchivedViewId("");
     setSettingsView("archived");
+  };
+
+  const logOut = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    setSettingsError("");
+    try {
+      await authService.logout();
+      navigate("/", { replace: true });
+    } catch (err: unknown) {
+      setSettingsError(errMsg(err, "Unable to sign out. Please try again."));
+      setLoggingOut(false);
+    }
   };
 
   const saveAccountType = async () => {
@@ -1612,7 +1703,6 @@ const Profile = () => {
     const setBusy = {
       profile: setUploadingProfile,
       cover: setUploadingCover,
-      story: setUploadingStory,
     }[kind];
 
     setBusy(true);
@@ -1624,23 +1714,7 @@ const Profile = () => {
 
       // 2. Save the Cloudinary URL in MongoDB and 3. update the screen
       //    from the response (no full profile reload).
-      if (kind === "story") {
-        const response = await profileService.createStory(imageUrl);
-        const newStory = response.data.story;
-
-        setProfile((previous) =>
-          previous
-            ? {
-                ...previous,
-                stories: [
-                  ...(previous.stories ?? []).filter(isStoryActive),
-                  newStory,
-                ],
-              }
-            : previous,
-        );
-        setNotice("Story published. It disappears after 24 hours.");
-      } else if (kind === "profile") {
+      if (kind === "profile") {
         await profileService.updateProfileImage({ profileimage: imageUrl });
         patchProfile({ profileimage: imageUrl });
         setOwnPhoto(imageUrl);
@@ -1665,6 +1739,25 @@ const Profile = () => {
       event.target.value = "";
       if (file) void uploadAndSaveImage(file, kind);
     };
+
+  // Story: pick a photo / video, edit it (crop / trim, stickers, text, caption), then post.
+  const { pickStory, storyElement } = useAddStory({
+    onPublished: (newStory) => {
+      setProfile((previous) =>
+        previous
+          ? {
+              ...previous,
+              stories: [
+                ...(previous.stories ?? []).filter(isStoryActive),
+                newStory,
+              ],
+            }
+          : previous,
+      );
+      setNotice("Story published. It disappears after 24 hours.");
+    },
+    onError: setError,
+  });
 
   // ---------------- People and posts ----------------
 
@@ -2048,13 +2141,7 @@ const Profile = () => {
         className="hidden"
         onChange={handleFile("cover")}
       />
-      <input
-        ref={storyInputRef}
-        type="file"
-        accept={ALLOWED_IMAGE_TYPES.join(",")}
-        className="hidden"
-        onChange={handleFile("story")}
-      />
+      {storyElement}
 
       <div className="mx-auto max-w-2xl sm:px-5 sm:pt-5">
         <section className="overflow-hidden bg-white shadow-[0_8px_32px_rgba(103,62,42,0.07)] sm:rounded-[30px] sm:border sm:border-[#EBDCD1]">
@@ -2073,7 +2160,7 @@ const Profile = () => {
           {/* Profile card */}
           <div className="relative flow-root -mt-6 rounded-t-[28px] bg-white px-5 pb-6 sm:px-8">
             {ownProfile && (
-              <div className="absolute right-4 top-4 flex items-center gap-2 sm:right-6">
+              <div className="absolute right-4 top-4 flex flex-col-reverse items-end gap-2 sm:right-6">
                 <button
                   type="button"
                   onClick={openSettings}
@@ -2137,17 +2224,12 @@ const Profile = () => {
               {ownProfile && (
                 <button
                   type="button"
-                  disabled={uploadingStory}
-                  onClick={() => storyInputRef.current?.click()}
+                  onClick={pickStory}
                   aria-label="Add story"
                   title="Add story"
                   className="absolute -bottom-1 -right-1 z-10 flex h-10 w-10 items-center justify-center rounded-full border-[3px] border-white bg-gradient-to-br from-[#D39472] to-[#994D35] text-white shadow-md disabled:opacity-70"
                 >
-                  {uploadingStory ? (
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/50 border-t-white" />
-                  ) : (
-                    <Icon d={ICONS.plus} className="h-5 w-5" />
-                  )}
+                  <Icon d={ICONS.plus} className="h-5 w-5" />
                 </button>
               )}
             </div>
@@ -2504,6 +2586,11 @@ const Profile = () => {
           onClose={closeSettings}
         >
           <div className="space-y-3">
+            {settingsError && (
+              <p role="alert" className="rounded-xl border border-[#E8B4A6] bg-[#FDECE7] px-4 py-3 text-sm font-semibold text-[#9A2F1B]">
+                {settingsError}
+              </p>
+            )}
             <SettingsRow
               icon={ICONS.user}
               title="Account settings"
@@ -2519,6 +2606,13 @@ const Profile = () => {
                 archivedPosts.length === 1 ? "post" : "posts"
               }. Only you can see them.`}
               onClick={openArchived}
+            />
+            <SettingsRow
+              icon={ICONS.logout}
+              title={loggingOut ? "Signing out…" : "Log out"}
+              description="Sign out of your account on this device."
+              onClick={() => void logOut()}
+              disabled={loggingOut}
             />
           </div>
         </SettingsSheet>

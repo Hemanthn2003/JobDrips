@@ -80,6 +80,83 @@ const sendServerError = (response: Response, message: string): void => {
 const isCloudinaryImageUrl = (value: string): boolean =>
   /^https:\/\/res\.cloudinary\.com\/[^/]+\/image\/upload\//i.test(value);
 
+// ---------------- Story editor helpers (caption, video, stickers, text) ----------------
+
+const MAX_STORY_SECONDS = 60;
+const MAX_STORY_CAPTION = 2200;
+const MAX_STORY_OVERLAYS = 30;
+const STORY_FONT_IDS = [
+  "sans",
+  "serif",
+  "mono",
+  "script",
+  "display",
+  "marker",
+  "condensed",
+  "elegant",
+];
+
+const isCloudinaryVideoUrl = (value: string): boolean =>
+  /^https:\/\/res\.cloudinary\.com\/[^/]+\/video\/upload\//i.test(value);
+
+const clampNumber = (value: unknown, min: number, max: number, fallback: number): number => {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
+};
+
+/** Validates the stickers / text the story editor sends. Anything odd is dropped. */
+const sanitizeStoryOverlays = (value: unknown) => {
+  if (!Array.isArray(value)) return [];
+
+  return value.slice(0, MAX_STORY_OVERLAYS).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const raw = item as Record<string, unknown>;
+    const kind = raw.kind === "sticker" || raw.kind === "text" ? raw.kind : null;
+    const content = typeof raw.content === "string" ? raw.content.slice(0, kind === "sticker" ? 32 : 300) : "";
+    if (!kind || !content.trim()) return [];
+
+    return [
+      {
+        id: typeof raw.id === "string" && raw.id ? raw.id.slice(0, 64) : randomUUID(),
+        kind,
+        content,
+        // x: fraction of the screen width; y: 0.5 = vertical centre, one unit = screen width
+        x: clampNumber(raw.x, -0.5, 1.5, 0.5),
+        y: clampNumber(raw.y, -3, 4, 0.5),
+        scale: clampNumber(raw.scale, 0.3, 6, 1),
+        rotation: clampNumber(raw.rotation, -360, 360, 0),
+        color: typeof raw.color === "string" && /^#[0-9a-f]{6}$/i.test(raw.color) ? raw.color : "#ffffff",
+        font: typeof raw.font === "string" && STORY_FONT_IDS.includes(raw.font) ? raw.font : "sans",
+        background: raw.background === true,
+      },
+    ];
+  });
+};
+
+/** Plain overlay objects for the API (works for documents and lean results). */
+const serializeStoryOverlays = (overlays: unknown) =>
+  Array.isArray(overlays)
+    ? overlays.map((o: any) => ({
+        id: o.id,
+        kind: o.kind,
+        content: o.content,
+        x: o.x,
+        y: o.y,
+        scale: o.scale,
+        rotation: o.rotation,
+        color: o.color,
+        font: o.font,
+        background: Boolean(o.background),
+      }))
+    : [];
+
+/** First frame of an uploaded Cloudinary video, used as the story poster / reply thumbnail. */
+const videoPosterUrl = (videoUrl: string): string =>
+  videoUrl
+    // drop an existing trim segment (e.g. so_5,eo_65/) so the poster is a single transformation
+    .replace(/\/video\/upload\/(?:[a-z]{1,3}_[^/]*\/)*/i, "/video/upload/so_0,w_720,c_limit/")
+    .replace(/\.[a-z0-9]+(?:\?.*)?$/i, ".jpg");
+
 const isActive = (story: { expiresAt: Date | string }): boolean =>
   new Date(story.expiresAt).getTime() > Date.now();
 
@@ -193,6 +270,12 @@ const serializeStories = (
       const base = {
         storyId: story.storyId,
         imageUrl: story.imageUrl,
+        mediaType: story.mediaType === "video" ? "video" : "image",
+        videoUrl: story.videoUrl || "",
+        duration: story.duration || 0,
+        aspect: story.aspect || 0,
+        caption: story.caption || "",
+        overlays: serializeStoryOverlays(story.overlays),
         createdAt: story.createdAt,
         expiresAt: story.expiresAt,
         seen: seenIds.has(viewerId),
@@ -831,7 +914,9 @@ export const deleteExperience = async (
 // --------------------------------------------------
 // CREATE STORY
 // POST /api/profiles/me/stories
-// Body: { imageUrl: Cloudinary secure URL }
+// Body (image story): { imageUrl, caption?, aspect?, overlays? }
+// Body (video story): { mediaType: "video", videoUrl, imageUrl?, duration?, caption?, aspect?, overlays? }
+// The URLs are Cloudinary secure URLs returned by /api/uploads/image|video.
 // Each story expires 24 hours after its own upload time.
 // --------------------------------------------------
 
@@ -847,29 +932,67 @@ export const createStory = async (
       return;
     }
 
-    const { imageUrl } = (request.body ?? {}) as { imageUrl?: unknown };
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const isVideo = body.mediaType === "video";
 
-    if (typeof imageUrl !== "string" || !isCloudinaryImageUrl(imageUrl)) {
+    let imageUrl = typeof body.imageUrl === "string" ? body.imageUrl : "";
+    let videoUrl = "";
+    let duration = 0;
+
+    if (isVideo) {
+      videoUrl = typeof body.videoUrl === "string" ? body.videoUrl : "";
+
+      if (!isCloudinaryVideoUrl(videoUrl)) {
+        sendBadRequest(response, "A valid Cloudinary video URL is required.");
+        return;
+      }
+
+      duration = clampNumber(body.duration, 0, MAX_STORY_SECONDS, 0);
+      // The poster frame is always derived from the (already validated) video URL.
+      imageUrl = videoPosterUrl(videoUrl);
+    } else if (!isCloudinaryImageUrl(imageUrl)) {
       sendBadRequest(response, "A valid Cloudinary image URL is required.");
       return;
     }
 
+    const caption =
+      typeof body.caption === "string"
+        ? body.caption.replace(/\r\n/g, "\n").trim().slice(0, MAX_STORY_CAPTION)
+        : "";
+
     const profile = await getOrCreateProfile(user);
     const now = new Date();
 
-    // Drop expired stories whenever a new one is published.
-    profile.stories = activeStories(profile) as never;
+    // Remove expired stories without validating unrelated legacy profile fields.
+    await Profile.updateOne(
+      { _id: profile._id },
+      { $pull: { stories: { expiresAt: { $lte: now } } } },
+    );
 
     const story = {
       storyId: randomUUID(),
       imageUrl,
+      mediaType: isVideo ? "video" : "image",
+      videoUrl,
+      duration,
+      aspect: clampNumber(body.aspect, 0, 10, 0),
+      caption,
+      overlays: sanitizeStoryOverlays(body.overlays),
       createdAt: now,
       expiresAt: new Date(now.getTime() + STORY_LIFETIME_MS),
       viewers: [],
     };
 
-    profile.stories.push(story as never);
-    await profile.save();
+    // A document save validates every embedded post too; a malformed legacy post
+    // must not prevent a valid story from being persisted.
+    const persisted = await Profile.updateOne(
+      { _id: profile._id },
+      { $push: { stories: story as never } },
+      { runValidators: true },
+    );
+    if (persisted.matchedCount === 0) {
+      throw new Error("The profile no longer exists; the story was not saved.");
+    }
 
     response.status(201).json({
       success: true,
@@ -878,17 +1001,29 @@ export const createStory = async (
         story: {
           storyId: story.storyId,
           imageUrl: story.imageUrl,
+          mediaType: story.mediaType,
+          videoUrl: story.videoUrl,
+          duration: story.duration,
+          aspect: story.aspect,
+          caption: story.caption,
+          overlays: story.overlays,
           createdAt: story.createdAt,
           expiresAt: story.expiresAt,
           seen: false,
           viewCount: 0,
+          likeCount: 0,
           viewers: [],
         },
       },
     });
   } catch (error) {
     console.error("Create story failed:", error);
-    sendServerError(response, "Unable to publish your story.");
+    sendServerError(
+      response,
+      process.env.NODE_ENV === "production"
+        ? "Unable to publish your story."
+        : `Unable to publish your story. (${error instanceof Error ? error.message : String(error)})`,
+    );
   }
 };
 
@@ -1056,21 +1191,18 @@ export const deleteStory = async (
 
     const profile = await getOrCreateProfile(user);
     const storyId = request.params.storyId;
-    const previousCount = profile.stories.length;
+    const result = await Profile.updateOne(
+      { _id: profile._id, "stories.storyId": storyId },
+      { $pull: { stories: { storyId } } },
+    );
 
-    profile.stories = profile.stories.filter(
-      (story) => story.storyId !== storyId,
-    ) as never;
-
-    if (profile.stories.length === previousCount) {
+    if (result.modifiedCount === 0) {
       response.status(404).json({
         success: false,
         message: "Story not found.",
       });
       return;
     }
-
-    await profile.save();
 
     response.status(200).json({
       success: true,

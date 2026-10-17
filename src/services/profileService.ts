@@ -67,9 +67,43 @@ export interface StoryViewer {
   viewedAt: string;
 }
 
+/** A sticker or text placed on a story (x / y are 0..1 of the media frame). */
+export interface StoryOverlay {
+  id: string;
+  kind: "sticker" | "text";
+  content: string;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+  color?: string;
+  font?: string;
+  background?: boolean;
+}
+
+/** Body of POST /api/profiles/me/stories. */
+export interface StoryPayload {
+  mediaType?: "image" | "video";
+  imageUrl?: string;
+  videoUrl?: string;
+  duration?: number;
+  aspect?: number;
+  caption?: string;
+  overlays?: StoryOverlay[];
+}
+
 export interface Story {
   storyId: string;
   imageUrl: string;
+  mediaType?: "image" | "video";
+  videoUrl?: string;
+  duration?: number;
+  /** width / height of the story media (0 = unknown / older stories). */
+  aspect?: number;
+  caption?: string;
+  overlays?: StoryOverlay[];
+  liked?: boolean;
+  likeCount?: number;
   createdAt: string;
   expiresAt: string;
   /** True once the person looking at this profile has watched the story. */
@@ -194,6 +228,21 @@ interface UploadImageResponse {
   success: boolean;
   message: string;
   data: UploadedImage;
+}
+
+export interface UploadedVideo {
+  secureUrl: string;
+  publicId: string;
+  format: string;
+  bytes: number;
+  /** Length in seconds of the (already trimmed) video. */
+  duration: number;
+}
+
+interface UploadVideoResponse {
+  success: boolean;
+  message: string;
+  data: UploadedVideo;
 }
 
 interface StoryResponse {
@@ -347,6 +396,28 @@ export const profileService = {
     );
   },
 
+  /**
+   * Uploads a story video through POST /api/uploads/video. When start / end
+   * (seconds) are given, the backend returns a video trimmed to that range.
+   */
+  uploadVideo(
+    file: File,
+    range?: { start?: number; end?: number },
+  ): Promise<UploadVideoResponse> {
+    const formData = new FormData();
+    if (range?.start !== undefined) formData.append("start", String(range.start));
+    if (range?.end !== undefined) formData.append("end", String(range.end));
+    formData.append("video", file);
+
+    return requestJson<UploadVideoResponse>(
+      `${API_BASE_URL}/api/uploads/video`,
+      {
+        method: "POST",
+        body: formData,
+      },
+    );
+  },
+
   /** GET /api/profiles/username-availability?username=... */
   checkUsernameAvailability(
     username: string,
@@ -388,11 +459,18 @@ export const profileService = {
     );
   },
 
-  /** Persist an uploaded Cloudinary URL as a new 24-hour story. */
-  createStory(imageUrl: string): Promise<StoryResponse> {
+  /**
+   * Persist uploaded Cloudinary media as a new 24-hour story.
+   * A plain string is treated as an image URL (the original behaviour); pass a
+   * StoryPayload to add a caption, video, stickers and text.
+   */
+  createStory(input: string | StoryPayload): Promise<StoryResponse> {
+    const body: StoryPayload =
+      typeof input === "string" ? { imageUrl: input } : input;
+
     return profileRequest<StoryResponse>("/me/stories", {
       method: "POST",
-      body: JSON.stringify({ imageUrl }),
+      body: JSON.stringify(body),
     });
   },
 

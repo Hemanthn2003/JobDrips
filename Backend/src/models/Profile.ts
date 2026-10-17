@@ -168,6 +168,20 @@ const postSettingsSchema = new Schema(
   { _id: false },
 );
 
+const postVideoMetaSchema = new Schema(
+  {
+    publicId: { type: String, default: "" },
+    originalDuration: { type: Number, default: 0 },
+    startTime: { type: Number, default: 0 },
+    endTime: { type: Number, default: 0 },
+    duration: { type: Number, default: 0 },
+    width: { type: Number, default: 0 },
+    height: { type: Number, default: 0 },
+    thumbnailUrl: { type: String, default: "" },
+  },
+  { _id: false },
+);
+
 // -------------------- EMBEDDED POSTS --------------------
 
 const postSchema = new Schema(
@@ -179,6 +193,8 @@ const postSchema = new Schema(
       type: postImageUrlSchema,
       default: () => ({}),
     },
+    videoUrl: { type: String, default: "" },
+    videoMeta: { type: postVideoMetaSchema, default: undefined },
     captions: { type: captionSchema, required: true },
     likes: { type: [likeSchema], default: [] },
     comments: { type: [commentSchema], default: [] },
@@ -282,6 +298,16 @@ const storySchema = new Schema(
   {
     storyId: { type: String, required: true },
     imageUrl: { type: String, required: true },
+    // NEW: story editor fields (all optional, so older stories keep working).
+    // For video stories `imageUrl` holds the poster frame.
+    mediaType: { type: String, enum: ["image", "video"], default: "image" },
+    videoUrl: { type: String, default: "" },
+    duration: { type: Number, default: 0 },
+    aspect: { type: Number, default: 0 },
+    caption: { type: String, default: "", maxlength: 2200 },
+    // Stickers / text placed in the story editor. The controller validates every item
+    // ({ id, kind, content, x, y, scale, rotation, color, font, background }) before saving.
+    overlays: { type: [Schema.Types.Mixed], default: [] },
     createdAt: { type: Date, default: Date.now, required: true },
     expiresAt: { type: Date, required: true },
     viewers: { type: [storyViewerSchema], default: [] },
@@ -364,6 +390,23 @@ export interface IProfile extends Document {
   stories: Array<{
     storyId: string;
     imageUrl: string;
+    mediaType?: "image" | "video";
+    videoUrl?: string;
+    duration?: number;
+    aspect?: number;
+    caption?: string;
+    overlays?: Array<{
+      id: string;
+      kind: "sticker" | "text";
+      content: string;
+      x: number;
+      y: number;
+      scale: number;
+      rotation: number;
+      color?: string;
+      font?: string;
+      background?: boolean;
+    }>;
     createdAt: Date;
     expiresAt: Date;
     viewers: Array<{

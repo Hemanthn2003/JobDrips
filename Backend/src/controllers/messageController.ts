@@ -337,6 +337,7 @@ export const listConversations = async (request: Request, response: Response): P
           const isOwner = String(p.userid) === me;
           return {
             storyId: s.storyId, imageUrl: s.imageUrl, videoUrl: s.videoUrl, mediaType: s.mediaType, duration: s.duration,
+            caption: s.caption || "", aspect: s.aspect || 0, overlays: s.overlays || [],
             createdAt: s.createdAt, expiresAt: s.expiresAt,
             seen: viewerIds.has(me), liked: likeIds.has(me),
             viewCount: isOwner ? [...viewerIds].filter((id) => id !== me).length : undefined,

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Check, CheckCheck, Image as ImageIcon, MoreHorizontal, Paperclip, Search, Send, Users, X } from "lucide-react";
 import { profileService, type Profile as ProfileData } from "../../services/profileService";
 import StoriesSection, { type StoryPerson } from "../../components/story/StoriesSection";
+import { useAddStory } from "../../components/story/useAddStory";
 import { useConfirm } from "../../components/common/ConfirmModal";
 import { useSocketEvent } from "../../lib/socket";
 import ConversationSheet from "./ConversationSheet";
@@ -423,6 +424,12 @@ const Messages = () => {
     finally { setBgUploading(false); if (bgInputRef.current) bgInputRef.current.value = ""; }
   };
 
+  // "Add story" opens the same picker + editor as the + button on the profile photo.
+  const { pickStory, storyElement } = useAddStory({
+    onPublished: () => { void loadConversationList(); },
+    onError: setError,
+  });
+
   // ---- Story callbacks (the viewer itself lives in StoriesSection) ----
   const handleStoryViewed = (userid: string, storyId: string) =>
     setStories((old) => old.map((p) => p.userid === userid ? { ...p, stories: p.stories.map((s) => s.storyId === storyId ? { ...s, seen: true } : s) } : p));
@@ -436,7 +443,7 @@ const Messages = () => {
   return (
     // The whole page scrolls (no inner scroll areas), so the list always uses the full width.
     <div className="fixed inset-x-0 top-16 bottom-16 z-30 overflow-y-auto bg-[#fffaf6] text-[#30241f]">
-      <div className="w-full px-3 py-3 sm:px-6">
+      <div className="mx-auto w-full max-w-[688px] px-3 py-3 sm:px-6 lg:px-0">
         {/* Search bar + New group button (above the stories) */}
         <div className={`mt-4 sm:mt-5 lg:mt-6 ${EDGE_SPACING}`}>
           <div className="flex items-center gap-2">
@@ -453,7 +460,7 @@ const Messages = () => {
         <StoriesSection
           stories={stories}
           meId={me?.userid}
-          onAddStory={() => navigate("/profile")}
+          onAddStory={pickStory}
           onViewed={handleStoryViewed}
           onDeleted={handleStoryDeleted}
         />
@@ -538,6 +545,7 @@ const Messages = () => {
 
       {showCreate && <div className="fixed inset-0 z-[100] grid place-items-center bg-black/40 p-4"><div className="w-full max-w-md rounded-3xl bg-[#fffaf6] p-5 shadow-xl"><div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-bold">Create group chat</h2><button onClick={() => setShowCreate(false)}><X/></button></div><label className="text-xs font-bold text-[#98715f]">GROUP NAME</label><input value={groupTitle} onChange={(e) => setGroupTitle(e.target.value)} maxLength={80} placeholder="Project team" className="mb-4 mt-1 w-full rounded-xl border border-[#e8d5c9] bg-white px-3 py-3 outline-none focus:border-[#b86f50]"/><p className="mb-2 text-xs font-bold text-[#98715f]">CHOOSE 2–39 FRIENDS (GROUPS HOLD UP TO 40 PEOPLE)</p><div className="max-h-64 space-y-1 overflow-auto">{friends.map((f) => <label key={f.userid} className="flex cursor-pointer items-center gap-3 rounded-xl p-2 hover:bg-[#fff0e7]"><input type="checkbox" checked={selectedFriends.includes(f.userid)} onChange={(e) => setSelectedFriends((old) => e.target.checked ? [...old, f.userid] : old.filter((id) => id !== f.userid))}/><Avatar src={f.profileimage} name={f.username} size="h-9 w-9"/><span className="text-sm font-semibold">{f.username}</span></label>)}</div><button onClick={() => void createGroup()} disabled={!groupTitle.trim() || selectedFriends.length < 2 || selectedFriends.length > 39} className="mt-4 w-full rounded-xl bg-gradient-to-r from-[#c77e5d] to-[#98452f] px-4 py-3 font-bold text-white disabled:opacity-50">Create group</button></div></div>}
 
+      {storyElement}
       {dialog}
     </div>
   );

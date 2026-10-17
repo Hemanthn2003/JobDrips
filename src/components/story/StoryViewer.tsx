@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Eye, Heart, Send, Trash2, X } from "lucide-react";
 import { useSocketEvent } from "../../lib/socket";
 import { useConfirm } from "../common/ConfirmModal";
+import { OverlayLayer, ensureStoryFonts } from "./storyOverlays";
+import type { StoryOverlay } from "./storyOverlays";
 
 const API = (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000").replace(/\/+$/, "");
 const IMAGE_STORY_SECONDS = 5;
@@ -13,6 +15,10 @@ export type StoryViewerStory = {
   videoUrl?: string;
   mediaType?: "image" | "video";
   duration?: number;
+  /** width / height of the media (0 / missing for older stories). */
+  aspect?: number;
+  caption?: string;
+  overlays?: StoryOverlay[];
   createdAt: string;
   seen?: boolean;
   liked?: boolean;
@@ -79,7 +85,10 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
   const [replySent, setReplySent] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [captionOpen, setCaptionOpen] = useState(false);
+  const [captionOverflow, setCaptionOverflow] = useState(false);
 
+  const captionRef = useRef<HTMLDivElement | null>(null);
   const elapsed = useRef(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const replyInputRef = useRef<HTMLInputElement | null>(null);
@@ -88,10 +97,19 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
   const currentIdRef = useRef("");
 
   const story = stories[index];
-  const paused = holding || replyFocus || panel !== "";
+  const paused = holding || replyFocus || panel !== "" || captionOpen;
   currentIdRef.current = story?.storyId ?? "";
 
   useEffect(() => () => window.clearTimeout(sentTimer.current), []);
+  useEffect(() => { ensureStoryFonts(); }, []);
+
+  // Two lines of caption fit as they are; anything longer gets a "Read more" link.
+  useLayoutEffect(() => {
+    const el = captionRef.current;
+    if (!el) { setCaptionOverflow(false); return; }
+    if (captionOpen) return;
+    setCaptionOverflow(el.scrollHeight > el.clientHeight + 1);
+  }, [story?.storyId, story?.caption, captionOpen]);
 
   const move = (direction: 1 | -1) => {
     const next = index + direction;
@@ -120,7 +138,7 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
   useEffect(() => {
     if (!story) return;
     elapsed.current = 0;
-    setProgress(0); setError(""); setPanel(""); setReply(""); setReplySent(false);
+    setProgress(0); setError(""); setPanel(""); setReply(""); setReplySent(false); setCaptionOpen(false);
     setLiked(Boolean(story.liked));
     setViewers([]); setLikers([]);
     setCounts({ views: story.viewCount ?? 0, likes: story.likeCount ?? 0 });
@@ -227,6 +245,20 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
   const mediaUrl = story.videoUrl || story.imageUrl;
   const list = panel === "views" ? viewers : likers;
 
+  const overlays = story.overlays ?? [];
+  const caption = (story.caption ?? "").trim();
+
+  const mediaNode = video ? (
+    <video
+      key={story.storyId} ref={videoRef} src={mediaUrl} autoPlay playsInline className="h-full w-full object-contain"
+      onTimeUpdate={(e) => { const v = e.currentTarget; if (Number.isFinite(v.duration) && v.duration > 0) setProgress(Math.min(100, (v.currentTime / v.duration) * 100)); }}
+      onEnded={() => move(1)}
+      onError={() => setError("Unable to load this story.")}
+    />
+  ) : (
+    <img key={story.storyId} src={mediaUrl} alt="Story" draggable={false} className="h-full w-full object-contain" onError={() => setError("Unable to load this story image.")} />
+  );
+
   const hold = (value: boolean) => (event: React.PointerEvent) => {
     if ((event.target as HTMLElement).closest("[data-nohold]")) return;
     setHolding(value);
@@ -261,17 +293,9 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
               <button type="button" data-nohold aria-label="Close story" className="ml-auto rounded-full bg-black/40 p-1.5" onClick={onClose}><X size={20} /></button>
             </header>
 
-            {/* Media */}
-            {video ? (
-              <video
-                key={story.storyId} ref={videoRef} src={mediaUrl} autoPlay playsInline className="h-full w-full object-contain"
-                onTimeUpdate={(e) => { const v = e.currentTarget; if (Number.isFinite(v.duration) && v.duration > 0) setProgress(Math.min(100, (v.currentTime / v.duration) * 100)); }}
-                onEnded={() => move(1)}
-                onError={() => setError("Unable to load this story.")}
-              />
-            ) : (
-              <img key={story.storyId} src={mediaUrl} alt="Story" draggable={false} className="h-full w-full object-contain" onError={() => setError("Unable to load this story image.")} />
-            )}
+            {/* Media, with the stickers / text from the story editor on top (they may also sit on the black area) */}
+            {mediaNode}
+            {overlays.length > 0 && <OverlayLayer overlays={overlays} />}
 
             {error && <p role="alert" className="absolute left-4 right-4 top-28 z-30 rounded-xl bg-red-600/90 px-3 py-2 text-center text-xs font-semibold text-white">{error}</p>}
             {replySent && <p role="status" className="absolute left-1/2 top-28 z-30 -translate-x-1/2 rounded-full bg-black/70 px-4 py-2 text-xs font-semibold text-white">Reply sent ✓</p>}
@@ -280,26 +304,49 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
             <button type="button" aria-label="Previous story" onClick={() => move(-1)} className={`absolute inset-y-24 left-0 z-20 w-[35%] ${panel ? "pointer-events-none" : ""}`} />
             <button type="button" aria-label="Next story" onClick={() => move(1)} className={`absolute inset-y-24 right-0 z-20 w-[65%] ${panel ? "pointer-events-none" : ""}`} />
 
-            {/* Footer */}
-            {isOwner ? (
-              <div data-nohold className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 bg-gradient-to-t from-black/90 to-transparent p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-12 text-white">
-                <button type="button" onClick={() => setPanel(panel === "views" ? "" : "views")} className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-2 text-xs font-semibold"><Eye size={15} /> {counts.views} {counts.views === 1 ? "view" : "views"}</button>
-                <button type="button" onClick={() => setPanel(panel === "likes" ? "" : "likes")} className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-2 text-xs font-semibold"><Heart size={15} /> {counts.likes} {counts.likes === 1 ? "like" : "likes"}</button>
-                <button type="button" disabled={busy} onClick={() => void deleteStory()} className="ml-auto flex items-center gap-1.5 rounded-full bg-red-500/85 px-3 py-2 text-xs font-semibold disabled:opacity-60"><Trash2 size={15} /> Delete</button>
-              </div>
-            ) : (
-              <div data-nohold className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 bg-gradient-to-t from-black/90 to-transparent p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-12">
-                <form onSubmit={(e) => { e.preventDefault(); void sendReply(); }} className="flex min-w-0 flex-1 items-center gap-2">
-                  <input
-                    ref={replyInputRef} value={reply} onChange={(e) => setReply(e.target.value)} onFocus={() => setReplyFocus(true)} onBlur={() => setReplyFocus(false)}
-                    placeholder="Reply to story…" maxLength={2000}
-                    className="min-w-0 flex-1 rounded-full border border-white/40 bg-black/35 px-4 py-3 text-sm text-white outline-none placeholder:text-white/70"
-                  />
-                  <button type="submit" disabled={!reply.trim() || busy} aria-label="Send reply" className="rounded-full bg-[#a94f32] p-3 text-white disabled:opacity-50"><Send size={17} /></button>
-                </form>
-                <button type="button" disabled={busy} onClick={() => void toggleLike()} aria-label={liked ? "Unlike story" : "Like story"} className={`rounded-full p-3 ${liked ? "bg-[#b64d36] text-white" : "bg-white/15 text-white"}`}><Heart size={19} fill={liked ? "currentColor" : "none"} /></button>
-              </div>
-            )}
+            {/* Footer: caption (when there is one) above the like / reply row */}
+            <div data-nohold className="absolute inset-x-0 bottom-0 z-30 flex flex-col bg-gradient-to-t from-black/90 via-black/50 to-transparent pt-12 text-white">
+              {caption && (
+                <div className={`px-4 pb-2 ${captionOpen ? "flex max-h-[33.333dvh] flex-col" : ""}`}>
+                  <div
+                    ref={captionRef}
+                    className={`whitespace-pre-wrap break-words text-sm leading-snug [overflow-wrap:anywhere] ${captionOpen ? "min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1" : ""}`}
+                    style={captionOpen ? undefined : { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+                  >
+                    {caption}
+                  </div>
+                  {(captionOverflow || captionOpen) && (
+                    <button
+                      type="button"
+                      onClick={() => setCaptionOpen((open) => !open)}
+                      className="mt-1 shrink-0 self-start text-xs font-bold text-white/85 underline underline-offset-2"
+                    >
+                      {captionOpen ? "Show less" : "Read more"}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {isOwner ? (
+                <div className="flex items-center gap-2 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                  <button type="button" onClick={() => setPanel(panel === "views" ? "" : "views")} className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-2 text-xs font-semibold"><Eye size={15} /> {counts.views} {counts.views === 1 ? "view" : "views"}</button>
+                  <button type="button" onClick={() => setPanel(panel === "likes" ? "" : "likes")} className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-2 text-xs font-semibold"><Heart size={15} /> {counts.likes} {counts.likes === 1 ? "like" : "likes"}</button>
+                  <button type="button" disabled={busy} onClick={() => void deleteStory()} aria-label="Delete story" title="Delete story" className="ml-auto grid h-10 w-10 place-items-center rounded-full bg-white/90 text-[#8B0000] disabled:opacity-60"><Trash2 size={19} /></button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                  <form onSubmit={(e) => { e.preventDefault(); void sendReply(); }} className="flex min-w-0 flex-1 items-center gap-2">
+                    <input
+                      ref={replyInputRef} value={reply} onChange={(e) => setReply(e.target.value)} onFocus={() => setReplyFocus(true)} onBlur={() => setReplyFocus(false)}
+                      placeholder="Reply to story…" maxLength={2000}
+                      className="min-w-0 flex-1 rounded-full border border-white/40 bg-black/35 px-4 py-3 text-sm text-white outline-none placeholder:text-white/70"
+                    />
+                    <button type="submit" disabled={!reply.trim() || busy} aria-label="Send reply" className="rounded-full bg-[#a94f32] p-3 text-white disabled:opacity-50"><Send size={17} /></button>
+                  </form>
+                  <button type="button" disabled={busy} onClick={() => void toggleLike()} aria-label={liked ? "Unlike story" : "Like story"} className={`rounded-full p-3 ${liked ? "bg-[#b64d36] text-white" : "bg-white/15 text-white"}`}><Heart size={19} fill={liked ? "currentColor" : "none"} /></button>
+                </div>
+              )}
+            </div>
 
             {/* Views / likes list (owner) */}
             {isOwner && panel && (
