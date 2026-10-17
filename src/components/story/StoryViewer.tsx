@@ -9,6 +9,19 @@ import type { StoryOverlay } from "./storyOverlays";
 const API = (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000").replace(/\/+$/, "");
 const IMAGE_STORY_SECONDS = 5;
 
+// The caption can scroll, but never shows a scrollbar.
+const HIDE_SCROLLBAR_CSS = `.jd-noscroll{scrollbar-width:none;-ms-overflow-style:none}.jd-noscroll::-webkit-scrollbar{display:none}`;
+
+/** Longer captions get a smaller font so that more text fits. */
+const captionFontSize = (length: number) => {
+  if (length <= 40) return 24;
+  if (length <= 80) return 21;
+  if (length <= 140) return 19;
+  if (length <= 240) return 17;
+  if (length <= 400) return 15.5;
+  return 14;
+};
+
 export type StoryViewerStory = {
   storyId: string;
   imageUrl: string;
@@ -89,6 +102,7 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
   const [captionOverflow, setCaptionOverflow] = useState(false);
 
   const captionRef = useRef<HTMLDivElement | null>(null);
+  const captionScrollRef = useRef<HTMLDivElement | null>(null);
   const elapsed = useRef(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const replyInputRef = useRef<HTMLInputElement | null>(null);
@@ -110,6 +124,11 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
     if (captionOpen) return;
     setCaptionOverflow(el.scrollHeight > el.clientHeight + 1);
   }, [story?.storyId, story?.caption, captionOpen]);
+
+  // Every time the caption is opened / closed, start reading from the top.
+  useEffect(() => {
+    if (captionScrollRef.current) captionScrollRef.current.scrollTop = 0;
+  }, [captionOpen, story?.storyId]);
 
   const move = (direction: 1 | -1) => {
     const next = index + direction;
@@ -247,6 +266,7 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
 
   const overlays = story.overlays ?? [];
   const caption = (story.caption ?? "").trim();
+  const captionSize = captionFontSize(caption.length);
 
   const mediaNode = video ? (
     <video
@@ -268,6 +288,7 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
     <>
       {createPortal(
         <div className="fixed inset-0 z-[10050] flex items-center justify-center bg-[#140D0B]" onClick={onClose}>
+          <style>{HIDE_SCROLLBAR_CSS}</style>
           <div
             className="relative h-[100dvh] w-full max-w-md select-none overflow-hidden bg-black sm:h-[min(94dvh,880px)] sm:rounded-3xl"
             onClick={(e) => e.stopPropagation()}
@@ -305,25 +326,41 @@ export default function StoryViewer({ person, startIndex = 0, isOwner, onClose, 
             <button type="button" aria-label="Next story" onClick={() => move(1)} className={`absolute inset-y-24 right-0 z-20 w-[65%] ${panel ? "pointer-events-none" : ""}`} />
 
             {/* Footer: caption (when there is one) above the like / reply row */}
-            <div data-nohold className="absolute inset-x-0 bottom-0 z-30 flex flex-col bg-gradient-to-t from-black/90 via-black/50 to-transparent pt-12 text-white">
+            <div
+              data-nohold
+              className={`absolute inset-x-0 bottom-0 z-30 flex flex-col bg-gradient-to-t from-black/90 to-transparent pt-16 text-white ${captionOpen ? "via-black/70" : "via-black/50"}`}
+            >
               {caption && (
-                <div className={`px-4 pb-2 ${captionOpen ? "flex max-h-[33.333dvh] flex-col" : ""}`}>
+                <div className="px-6 pb-5">
+                  {/* Collapsed: max 2 lines + "Read more". Expanded: up to 1/3 of the screen height, scrollable (no scrollbar), "Show less" at the end. */}
                   <div
-                    ref={captionRef}
-                    className={`whitespace-pre-wrap break-words text-sm leading-snug [overflow-wrap:anywhere] ${captionOpen ? "min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1" : ""}`}
-                    style={captionOpen ? undefined : { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+                    ref={captionScrollRef}
+                    className={`jd-noscroll text-center ${captionOpen ? "max-h-[33.333dvh] overflow-y-auto overscroll-contain" : ""}`}
                   >
-                    {caption}
-                  </div>
-                  {(captionOverflow || captionOpen) && (
-                    <button
-                      type="button"
-                      onClick={() => setCaptionOpen((open) => !open)}
-                      className="mt-1 shrink-0 self-start text-xs font-bold text-white/85 underline underline-offset-2"
+                    <div
+                      ref={captionRef}
+                      className="whitespace-pre-wrap break-words font-medium [overflow-wrap:anywhere]"
+                      style={{
+                        fontSize: captionSize,
+                        lineHeight: 1.35,
+                        textShadow: "0 1px 6px rgba(0,0,0,.6)",
+                        ...(captionOpen
+                          ? {}
+                          : { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const, overflow: "hidden" }),
+                      }}
                     >
-                      {captionOpen ? "Show less" : "Read more"}
-                    </button>
-                  )}
+                      {caption}
+                    </div>
+                    {(captionOverflow || captionOpen) && (
+                      <button
+                        type="button"
+                        onClick={() => setCaptionOpen((open) => !open)}
+                        className="mt-2 text-xs font-bold text-white/85 underline underline-offset-2"
+                      >
+                        {captionOpen ? "Show less" : "Read more"}
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
 
