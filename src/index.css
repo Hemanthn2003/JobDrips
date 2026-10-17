@@ -52,6 +52,7 @@
 
 * {
   box-sizing: border-box;
+  caret-color: transparent;
 }
 
 html,
@@ -87,6 +88,11 @@ input,
 textarea,
 select {
   font: inherit;
+}
+
+input:not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="checkbox"]):not([type="radio"]),
+textarea {
+  caret-color: auto;
 }
 
 button {

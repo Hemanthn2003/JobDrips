@@ -1459,7 +1459,7 @@ const Profile = () => {
     setSettingsError("");
     try {
       await authService.logout();
-      navigate("/", { replace: true });
+      navigate("/login", { replace: true });
     } catch (err: unknown) {
       setSettingsError(errMsg(err, "Unable to sign out. Please try again."));
       setLoggingOut(false);

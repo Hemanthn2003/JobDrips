@@ -3,6 +3,7 @@ import { Router } from "express";
 import {
   googleCallback,
   googleLogin,
+  checkSession,
   getCurrentUser,
   login,
   logout,
@@ -18,6 +19,11 @@ import {
 import { authenticate } from "../utils/authMiddleware.js";
 
 const router = Router();
+
+router.get(
+  "/session",
+  checkSession
+);
 
 router.post(
   "/signup/request-otp",

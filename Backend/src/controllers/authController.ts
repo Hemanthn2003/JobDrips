@@ -718,6 +718,71 @@ export const refreshAccessToken = async (
   }
 };
 
+export const checkSession = async (
+  request: Request,
+  response: Response
+) => {
+  const accessToken = request.cookies?.[getAccessTokenCookieName()];
+  const refreshToken = request.cookies?.[getRefreshTokenCookieName()];
+
+  try {
+    const accessSecret = process.env.JWT_ACCESS_SECRET;
+    if (!accessSecret) throw new Error("JWT_ACCESS_SECRET is missing.");
+
+    if (accessToken) {
+      try {
+        const payload = jwt.verify(accessToken, accessSecret) as jwt.JwtPayload;
+        if (payload.type === "access" && typeof payload.sub === "string") {
+          const user = await User.findById(payload.sub);
+          if (user) return response.json({ authenticated: true });
+        }
+      } catch (error) {
+        if (!(error instanceof jwt.TokenExpiredError) && !(error instanceof jwt.JsonWebTokenError)) {
+          throw error;
+        }
+      }
+    }
+
+    if (!refreshToken) {
+      clearAuthCookies(response);
+      return response.json({ authenticated: false });
+    }
+
+    const refreshSecret = process.env.JWT_REFRESH_SECRET;
+    if (!refreshSecret) throw new Error("JWT_REFRESH_SECRET is missing.");
+
+    let payload: jwt.JwtPayload;
+    try {
+      payload = jwt.verify(refreshToken, refreshSecret) as jwt.JwtPayload;
+    } catch (error) {
+      if (error instanceof jwt.TokenExpiredError || error instanceof jwt.JsonWebTokenError) {
+        clearAuthCookies(response);
+        return response.json({ authenticated: false });
+      }
+      throw error;
+    }
+
+    if (payload.type !== "refresh" || typeof payload.sub !== "string") {
+      clearAuthCookies(response);
+      return response.json({ authenticated: false });
+    }
+
+    const user = await User.findById(payload.sub);
+    if (!user?.refreshTokenHash || user.refreshTokenHash !== hashValue(refreshToken)) {
+      clearAuthCookies(response);
+      return response.json({ authenticated: false });
+    }
+
+    await issueLoginTokens(user, response, payload.rememberMe === true);
+    return response.json({ authenticated: true });
+  } catch (error) {
+    console.error("checkSession:", error);
+    return response.status(500).json({
+      message: "Unable to verify your session.",
+    });
+  }
+};
+
 export const logout = async (
   request: Request,
   response: Response
