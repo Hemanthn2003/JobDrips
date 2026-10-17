@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Archive,
   Bookmark,
   Eye,
   Flag,
+  Maximize,
   MessageCircle,
   MessageSquare,
+  Minimize,
   MoreHorizontal,
+  Pause,
   Pencil,
+  Play,
   Send,
   Trash2,
   Volume2,
@@ -47,6 +50,47 @@ interface Props {
 
 const errText = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
+
+const formatTime = (seconds: number) => {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const whole = Math.floor(seconds);
+  const minutes = Math.floor(whole / 60);
+  const rest = String(whole % 60).padStart(2, "0");
+  return `${minutes}:${rest}`;
+};
+
+// --------------------------------------------------
+// Medal burst (shared by photo and video posts)
+// --------------------------------------------------
+
+/**
+ * Big medal shown for one second after a double tap.
+ * Over a video it uses a scale-only animation (no opacity fade), because a
+ * fading element over a video layer is what the browser paints as a box.
+ */
+function MedalBurst({
+  burstKey,
+  overVideo = false,
+}: {
+  burstKey: number;
+  overVideo?: boolean;
+}) {
+  return (
+    <img
+      key={burstKey}
+      src={MEDAL_ACTIVE_ICON}
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      className={`pointer-events-none absolute left-1/2 top-1/2 z-30 -ml-16 -mt-16 h-32 w-32 ${
+        overVideo ? "" : "drop-shadow-xl"
+      }`}
+      style={{
+        animation: `${overVideo ? "jd-medal-pop-video" : "jd-medal-pop"} 1s ease-out forwards`,
+      }}
+    />
+  );
+}
 
 function ActionButton({
   label,
@@ -95,6 +139,12 @@ export default function PostCard({
   );
   const [imageIndex, setImageIndex] = useState(0);
   const [videoMuted, setVideoMuted] = useState(true);
+  const [videoPlaying, setVideoPlaying] = useState(false);
+  const [videoTime, setVideoTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const videoBoxRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const carouselRef = useRef<HTMLDivElement>(null);
   const [showComments, setShowComments] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -105,13 +155,28 @@ export default function PostCard({
   const [error, setError] = useState("");
   const lastTap = useRef(0);
   const burstTimer = useRef<number | undefined>(undefined);
+  const tapTimer = useRef<number | undefined>(undefined);
 
   useEffect(
     () => () => {
       window.clearTimeout(burstTimer.current);
+      window.clearTimeout(tapTimer.current);
     },
     [],
   );
+
+  // Keeps the fullscreen button icon and video sizing in sync.
+  useEffect(() => {
+    const onChange = () => {
+      setIsFullscreen(
+        Boolean(videoBoxRef.current) &&
+          document.fullscreenElement === videoBoxRef.current,
+      );
+    };
+
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
 
   const images = getPostImages(post);
   const currentImage = Math.min(imageIndex, Math.max(images.length - 1, 0));
@@ -145,11 +210,51 @@ export default function PostCard({
     navigate(`/profile/${encodeURIComponent(post.author.userid)}`);
   };
 
-  // Big medal that shows for one second on the photo.
+  // Big medal that shows for one second on the photo / video.
   const triggerBurst = () => {
     window.clearTimeout(burstTimer.current);
     setBurst((value) => value + 1);
     burstTimer.current = window.setTimeout(() => setBurst(0), 1000);
+  };
+
+  // --------------------------------------------------
+  // Video controls (custom, so the browser draws no native control layer)
+  // --------------------------------------------------
+
+  const togglePlay = () => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (video.paused) void video.play().catch(() => undefined);
+    else video.pause();
+  };
+
+  const seekVideo = (value: number) => {
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(value)) return;
+    video.currentTime = value;
+    setVideoTime(value);
+  };
+
+  // Our own fullscreen button. It fullscreens the wrapper (not the <video>),
+  // so the medal is still visible while in fullscreen.
+  const toggleFullscreen = () => {
+    const box = videoBoxRef.current;
+    const video = videoRef.current as
+      | (HTMLVideoElement & { webkitEnterFullscreen?: () => void })
+      | null;
+
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+      return;
+    }
+
+    if (box?.requestFullscreen) {
+      void box.requestFullscreen().catch(() => undefined);
+    } else if (video?.webkitEnterFullscreen) {
+      // iPhone Safari can only fullscreen the video itself.
+      video.webkitEnterFullscreen();
+    }
   };
 
   const applyLike = async (liked: boolean) => {
@@ -190,21 +295,20 @@ export default function PostCard({
     }
   };
 
-  const handleVideoDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const x = event.clientX - bounds.left;
-    const y = event.clientY - bounds.top;
-    if (
-      x < bounds.width * 0.25 ||
-      x > bounds.width * 0.75 ||
-      y < bounds.height * 0.25 ||
-      y > bounds.height * 0.75
-    ) return;
-    lastTap.current = 0;
-    if (!post.liked) triggerBurst();
-    void applyLike(true);
+  // Video: one tap plays / pauses, a double tap anywhere likes the post.
+  const handleVideoTap = () => {
+    const now = Date.now();
+    window.clearTimeout(tapTimer.current);
+
+    if (now - lastTap.current < 320) {
+      lastTap.current = 0;
+      triggerBurst();
+      void applyLike(true);
+      return;
+    }
+
+    lastTap.current = now;
+    tapTimer.current = window.setTimeout(togglePlay, 320);
   };
 
   const handleCarouselScroll = () => {
@@ -334,6 +438,9 @@ export default function PostCard({
 
   const archiveMenuText = post.archived ? (unarchiveLabel ?? "Unarchive") : "Archive";
 
+  const controlButton =
+    "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white transition hover:bg-white/20";
+
   return (
     <article className="w-full overflow-hidden border-y border-[#eee4dd] bg-white sm:rounded-2xl sm:border sm:shadow-[0_5px_24px_rgba(67,43,29,0.045)]">
       <style>{`
@@ -343,6 +450,13 @@ export default function PostCard({
           45% { transform: scale(1); opacity: 1; }
           80% { transform: scale(1); opacity: 1; }
           100% { transform: scale(1.2); opacity: 0; }
+        }
+        @keyframes jd-medal-pop-video {
+          0% { transform: scale(0.3); }
+          25% { transform: scale(1.15); }
+          45% { transform: scale(1); }
+          80% { transform: scale(1); }
+          100% { transform: scale(0); }
         }
         .jd-post-carousel { scrollbar-width: none; }
         .jd-post-carousel::-webkit-scrollbar { display: none; }
@@ -455,47 +569,99 @@ export default function PostCard({
       {/* Video */}
       {post.videoUrl && (
         <div
-          className="relative w-full overflow-hidden bg-black"
-          onDoubleClickCapture={handleVideoDoubleClick}
+          ref={videoBoxRef}
+          className={`relative w-full select-none overflow-hidden bg-black ${
+            isFullscreen ? "flex h-full items-center justify-center" : ""
+          }`}
         >
           <video
+            ref={videoRef}
             src={post.videoUrl}
-            controls
             playsInline
+            preload="metadata"
             muted={videoMuted}
             poster={post.videoMeta?.thumbnailUrl}
-            className="max-h-[600px] w-full bg-transparent object-contain"
+            onPlay={() => setVideoPlaying(true)}
+            onPause={() => setVideoPlaying(false)}
+            onTimeUpdate={(event) => setVideoTime(event.currentTarget.currentTime)}
+            onLoadedMetadata={(event) => setVideoDuration(event.currentTarget.duration)}
+            onDurationChange={(event) => setVideoDuration(event.currentTarget.duration)}
+            className={`block w-full bg-black object-contain ${
+              isFullscreen ? "h-full max-h-none" : "max-h-[600px]"
+            }`}
           />
+
+          {/* Tap layer: one tap = play / pause, double tap = like */}
           <div
             aria-hidden="true"
-            className="absolute inset-1/4 z-10 cursor-pointer bg-transparent"
-            onClick={handleImageClick}
-            onDoubleClick={handleVideoDoubleClick}
+            className="absolute inset-0 z-10 cursor-pointer"
+            onClick={handleVideoTap}
           />
-          {burst > 0 && (
-            <img
-              key={burst}
-              src={MEDAL_ACTIVE_ICON}
-              alt=""
+
+          {!videoPlaying && (
+            <div
               aria-hidden="true"
-              className="pointer-events-none absolute left-1/2 top-1/2 z-10 -ml-16 -mt-16 h-32 w-32"
-              style={{
-                animation: "jd-medal-pop 1s ease-out forwards",
-                background: "none",
-                boxShadow: "none",
-                filter: "none",
-              }}
-            />
+              className="pointer-events-none absolute left-1/2 top-1/2 z-10 flex h-14 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/55 text-white"
+            >
+              <Play size={26} fill="currentColor" />
+            </div>
           )}
-          <button
-            type="button"
-            aria-label={videoMuted ? "Unmute video" : "Mute video"}
-            aria-pressed={!videoMuted}
-            onClick={() => setVideoMuted((muted) => !muted)}
-            className="absolute right-3 top-3 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-black/65 text-white shadow backdrop-blur transition hover:bg-black/80"
-          >
-            {videoMuted ? <VolumeX size={19} /> : <Volume2 size={19} />}
-          </button>
+
+          {burst > 0 && <MedalBurst burstKey={burst} overVideo />}
+
+          {/* Control bar */}
+          <div className="absolute inset-x-0 bottom-0 z-20 flex items-center gap-1.5 bg-black/45 px-2 py-1.5 text-white">
+            <button
+              type="button"
+              aria-label={videoPlaying ? "Pause video" : "Play video"}
+              onClick={togglePlay}
+              className={controlButton}
+            >
+              {videoPlaying ? (
+                <Pause size={18} fill="currentColor" />
+              ) : (
+                <Play size={18} fill="currentColor" />
+              )}
+            </button>
+
+            <span className="w-9 shrink-0 text-center text-[11px] font-semibold tabular-nums">
+              {formatTime(videoTime)}
+            </span>
+
+            <input
+              type="range"
+              aria-label="Seek video"
+              min={0}
+              max={videoDuration > 0 ? videoDuration : 0}
+              step={0.1}
+              value={Math.min(videoTime, videoDuration || 0)}
+              onChange={(event) => seekVideo(Number(event.target.value))}
+              className="h-1 min-w-0 flex-1 cursor-pointer accent-white"
+            />
+
+            <span className="w-9 shrink-0 text-center text-[11px] font-semibold tabular-nums">
+              {formatTime(videoDuration)}
+            </span>
+
+            <button
+              type="button"
+              aria-label={videoMuted ? "Unmute video" : "Mute video"}
+              aria-pressed={!videoMuted}
+              onClick={() => setVideoMuted((muted) => !muted)}
+              className={controlButton}
+            >
+              {videoMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+            </button>
+
+            <button
+              type="button"
+              aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
+              onClick={toggleFullscreen}
+              className={controlButton}
+            >
+              {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
+            </button>
+          </div>
         </div>
       )}
 
@@ -522,16 +688,7 @@ export default function PostCard({
                   className="h-full w-full object-contain"
                   loading="lazy"
                 />
-                {index === currentImage && burst > 0 && (
-                  <img
-                    key={burst}
-                    src={MEDAL_ACTIVE_ICON}
-                    alt=""
-                    aria-hidden="true"
-                    className="pointer-events-none absolute left-1/2 top-1/2 -ml-16 -mt-16 h-32 w-32 drop-shadow-xl"
-                    style={{ animation: "jd-medal-pop 1s ease-out forwards" }}
-                  />
-                )}
+                {index === currentImage && burst > 0 && <MedalBurst burstKey={burst} />}
                 {images.length > 1 && index === currentImage && (
                   <span className="absolute right-3 top-3 rounded-full bg-[#2b211bcc] px-2.5 py-1 text-[11px] font-semibold text-white">
                     {currentImage + 1} / {images.length}
