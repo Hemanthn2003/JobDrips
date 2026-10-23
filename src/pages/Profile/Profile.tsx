@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { authService } from "../../services/authService";
 import { profileService } from "../../services/profileService";
 import { MessageSheet } from "../../components/post/PostSheets";
@@ -1203,6 +1203,14 @@ function PostGrid({
 
 const Profile = () => {
   const { userid } = useParams<{ userid: string }>();
+  const { pathname } = useLocation();
+  const isProfileActive = userid
+    ? pathname === `/profile/${encodeURIComponent(userid)}`
+    : pathname === "/profile";
+  const pathnameRef = useRef(pathname);
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
   const navigate = useNavigate();
   // True when this page shows the signed-in person's own profile.
   const [selfView, setSelfView] = useState(false);
@@ -1296,52 +1304,65 @@ const Profile = () => {
 
   // ---------------- Loading ----------------
 
-  const loadProfile = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    setError("");
+  const profileLoadRequests = useRef(new Map<string, Promise<void>>());
+  const loadProfile = useCallback((silent = false) => {
+    const requestKey = userid || "self";
+    const existingRequest = profileLoadRequests.current.get(requestKey);
+    if (existingRequest) return existingRequest;
 
-    try {
-      if (userid) {
-        const response = await profileService.getPublicProfile(userid);
+    const request = Promise.resolve().then(async () => {
+      if (!silent) setLoading(true);
+      setError("");
 
-        if (response.data.relationship === "self") {
-          // Opened our own profile through a link: show the full own view.
-          const mine = await profileService.getMyProfile();
-          setSelfView(true);
-          setProfile(mine.data.profile);
-          setOwnName(mine.data.user.name || "");
-          setOwnEmail(mine.data.user.email || "");
-          setOwnPhoto(mine.data.user.profilePhoto || "");
+      try {
+        if (userid) {
+          const response = await profileService.getPublicProfile(userid);
+
+          if (response.data.relationship === "self") {
+            // Opened our own profile through a link: show the full own view.
+            const mine = await profileService.getMyProfile();
+            setSelfView(true);
+            setProfile(mine.data.profile);
+            setOwnName(mine.data.user.name || "");
+            setOwnEmail(mine.data.user.email || "");
+            setOwnPhoto(mine.data.user.profilePhoto || "");
+          } else {
+            setSelfView(false);
+            setProfile(response.data);
+            setOwnName("");
+            setOwnEmail("");
+            setOwnPhoto("");
+          }
         } else {
           setSelfView(false);
-          setProfile(response.data);
-          setOwnName("");
-          setOwnEmail("");
-          setOwnPhoto("");
+          const response = await profileService.getMyProfile();
+          setProfile(response.data.profile);
+          setOwnName(response.data.user.name || "");
+          setOwnEmail(response.data.user.email || "");
+          setOwnPhoto(response.data.user.profilePhoto || "");
         }
-      } else {
-        setSelfView(false);
-        const response = await profileService.getMyProfile();
-        setProfile(response.data.profile);
-        setOwnName(response.data.user.name || "");
-        setOwnEmail(response.data.user.email || "");
-        setOwnPhoto(response.data.user.profilePhoto || "");
-      }
-    } catch (err: unknown) {
-      const message = errMsg(err, "Unable to load profile.");
+      } catch (err: unknown) {
+        const message = errMsg(err, "Unable to load profile.");
 
-      if (
-        message.toLowerCase().includes("unauthorized") ||
-        message.toLowerCase().includes("authentication")
-      ) {
-        navigate("/", { replace: true });
-        return;
-      }
+        if (
+          message.toLowerCase().includes("unauthorized") ||
+          message.toLowerCase().includes("authentication")
+        ) {
+          navigate("/", { replace: true });
+          return;
+        }
 
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
+        setError(message);
+      } finally {
+        setLoading(false);
+        if (profileLoadRequests.current.get(requestKey) === request) {
+          profileLoadRequests.current.delete(requestKey);
+        }
+      }
+    });
+
+    profileLoadRequests.current.set(requestKey, request);
+    return request;
   }, [userid, navigate]);
 
   useEffect(() => {
@@ -1350,11 +1371,29 @@ const Profile = () => {
 
   // Live updates: stories (views / likes / new / deleted), posts, friends.
   const reloadTimer = useRef<number | undefined>(undefined);
+  const refreshOnActivate = useRef(false);
   const reloadSoon = useCallback(() => {
+    if (!isProfileActive) {
+      refreshOnActivate.current = true;
+      return;
+    }
     window.clearTimeout(reloadTimer.current);
-    reloadTimer.current = window.setTimeout(() => { void loadProfile(true); }, 400);
-  }, [loadProfile]);
+    reloadTimer.current = window.setTimeout(() => {
+      const expectedPath = userid ? `/profile/${encodeURIComponent(userid)}` : "/profile";
+      if (pathnameRef.current !== expectedPath) {
+        refreshOnActivate.current = true;
+        return;
+      }
+      void loadProfile(true);
+    }, 400);
+  }, [isProfileActive, loadProfile, userid]);
   useEffect(() => () => window.clearTimeout(reloadTimer.current), []);
+  useEffect(() => {
+    if (isProfileActive && refreshOnActivate.current) {
+      refreshOnActivate.current = false;
+      reloadSoon();
+    }
+  }, [isProfileActive, reloadSoon]);
   const viewedProfileId = userid || profile?.userid;
   useSocketEvent<{ ownerUserId?: string; actorId?: string; action?: string }>("story:updated", (event) => {
     const isMyOwnStoryCreate =

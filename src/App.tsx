@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import SplashScreen from "./pages/Login/SplashScreen";
 import Login from "./pages/Login/Login";
@@ -30,9 +30,7 @@ function SessionCheck() {
 }
 
 function ProtectedRoutes() {
-  const { pathname } = useLocation();
   const [status, setStatus] = useState<"checking" | "authenticated" | "unauthenticated" | "error">("checking");
-  const [validatedPath, setValidatedPath] = useState("");
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
@@ -42,19 +40,15 @@ function ProtectedRoutes() {
     const validate = () => {
       if (checking || document.visibilityState !== "visible") return;
       checking = true;
-      setStatus("checking");
-      setValidatedPath("");
       void authService.restoreSession()
         .then((valid) => {
           if (active) {
             setStatus(valid ? "authenticated" : "unauthenticated");
-            setValidatedPath(pathname);
           }
         })
         .catch(() => {
           if (active) {
             setStatus("error");
-            setValidatedPath(pathname);
           }
         })
         .finally(() => { checking = false; });
@@ -68,9 +62,8 @@ function ProtectedRoutes() {
       window.removeEventListener("focus", validate);
       document.removeEventListener("visibilitychange", validate);
     };
-  }, [pathname, retry]);
+  }, [retry]);
 
-  if (validatedPath !== pathname) return <SessionCheck />;
   if (status === "checking") return <SessionCheck />;
   if (status === "unauthenticated") return <Navigate to="/login" replace />;
   if (status === "error") {
@@ -82,7 +75,10 @@ function ProtectedRoutes() {
           </p>
           <button
             type="button"
-            onClick={() => setRetry((count) => count + 1)}
+            onClick={() => {
+              setStatus("checking");
+              setRetry((count) => count + 1);
+            }}
             className="mt-4 rounded-xl bg-[#654536] px-5 py-2.5 text-sm font-semibold text-white"
           >
             Retry

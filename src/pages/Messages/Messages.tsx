@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Check, CheckCheck, Image as ImageIcon, MoreHorizontal, Paperclip, Search, Send, Users, X } from "lucide-react";
 import { profileService, type Profile as ProfileData } from "../../services/profileService";
 import StoriesSection, { type StoryPerson } from "../../components/story/StoriesSection";
@@ -144,6 +144,12 @@ function Bubble({ m, mine, meId, group, onImage, onPost, onMediaLoad }: { m: Cha
 }
 
 const Messages = () => {
+  const { pathname } = useLocation();
+  const pathnameRef = useRef(pathname);
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
+  const isPageActive = pathname === "/messages";
   const navigate = useNavigate();
   const { confirm, dialog } = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -175,14 +181,20 @@ const Messages = () => {
   const pinnedRef = useRef(true); // true while the reader is at (or opening) the bottom of the chat
   const reloadTimer = useRef<number | undefined>(undefined);
   const refreshProfileAfterReload = useRef(false);
+  const refreshListOnActivate = useRef(false);
+  const refreshProfileOnActivate = useRef(false);
+  const conversationListRequest = useRef<Promise<void> | null>(null);
+  const landingRequest = useRef<Promise<void> | null>(null);
 
   // Refs let the shared socket handlers always see the latest state.
   const activeRef = useRef<ConversationRow | null>(null);
   const meRef = useRef<ProfileData | null>(null);
   const conversationsRef = useRef<ConversationRow[]>([]);
   const rowCache = useRef(new Map<string, ConversationRow>());
-  meRef.current = me;
-  conversationsRef.current = conversations;
+  useLayoutEffect(() => {
+    meRef.current = me;
+    conversationsRef.current = conversations;
+  }, [me, conversations]);
 
   const applyConversationList = useCallback((data: { conversations: ConversationRow[]; stories: StoryPerson[] }) => {
     // Never allow two rows with the same conversationId (React key collisions).
@@ -190,34 +202,60 @@ const Messages = () => {
     setStories(data.stories);
   }, []);
 
-  const loadConversationList = useCallback(async () => {
-    setError("");
-    try {
-      const result = await api<ApiResult<{ conversations: ConversationRow[]; stories: StoryPerson[] }>>("/api/messages/conversations");
-      applyConversationList(result.data);
-    } catch (e) { setError(e instanceof Error ? e.message : "Unable to load messages."); }
-  }, [applyConversationList]);
+  const loadConversationList = useCallback(() => {
+    if (conversationListRequest.current) return conversationListRequest.current;
+    const request = Promise.resolve().then(async () => {
+      setError("");
+      try {
+        const result = await api<ApiResult<{ conversations: ConversationRow[]; stories: StoryPerson[] }>>("/api/messages/conversations");
+        applyConversationList(result.data);
+      } catch (e) { setError(e instanceof Error ? e.message : "Unable to load messages."); }
+      finally {
+        if (conversationListRequest.current === request) conversationListRequest.current = null;
+      }
+    });
+    conversationListRequest.current = request;
+    return request;
+  }, [applyConversationList, setError]);
 
-  const loadLanding = useCallback(async () => {
-    setError("");
-    try {
-      const [profileResponse, listResponse] = await Promise.all([
-        profileService.getMyProfile(),
-        api<ApiResult<{ conversations: ConversationRow[]; stories: StoryPerson[] }>>("/api/messages/conversations"),
-      ]);
-      const own = profileResponse.data.profile;
-      setMe(own);
-      setFriends((own.friends || []).filter((f) => f.friendshipAccepted).map((f) => ({ userid: f.userid, username: f.username, profileimage: f.profileimage })));
-      applyConversationList(listResponse.data);
-    } catch (e) { setError(e instanceof Error ? e.message : "Unable to load messages."); }
-    finally { setLoading(false); }
-  }, [applyConversationList]);
+  const loadLanding = useCallback(() => {
+    if (landingRequest.current) return landingRequest.current;
+    const request = Promise.resolve().then(async () => {
+      setError("");
+      try {
+        const [profileResponse] = await Promise.all([
+          profileService.getMyProfile(),
+          loadConversationList(),
+        ]);
+        const own = profileResponse.data.profile;
+        setMe(own);
+        setFriends((own.friends || []).filter((f) => f.friendshipAccepted).map((f) => ({ userid: f.userid, username: f.username, profileimage: f.profileimage })));
+      } catch (e) { setError(e instanceof Error ? e.message : "Unable to load messages."); }
+      finally {
+        setLoading(false);
+        if (landingRequest.current === request) landingRequest.current = null;
+      }
+    });
+    landingRequest.current = request;
+    return request;
+  }, [loadConversationList, setError]);
 
   /** Coalesces socket bursts and only reloads profile data for friend changes. */
   const loadSoon = useCallback((includeProfile = false) => {
+    if (pathnameRef.current !== "/messages") {
+      refreshListOnActivate.current = true;
+      refreshProfileOnActivate.current ||= includeProfile;
+      return;
+    }
     refreshProfileAfterReload.current ||= includeProfile;
     window.clearTimeout(reloadTimer.current);
     reloadTimer.current = window.setTimeout(() => {
+      if (pathnameRef.current !== "/messages") {
+        refreshListOnActivate.current = true;
+        refreshProfileOnActivate.current ||= refreshProfileAfterReload.current;
+        refreshProfileAfterReload.current = false;
+        return;
+      }
       const shouldReloadProfile = refreshProfileAfterReload.current;
       refreshProfileAfterReload.current = false;
       if (shouldReloadProfile) void loadLanding();
@@ -226,6 +264,16 @@ const Messages = () => {
   }, [loadConversationList, loadLanding]);
 
   useEffect(() => { void loadLanding(); return () => window.clearTimeout(reloadTimer.current); }, [loadLanding]);
+
+  useEffect(() => {
+    if (!isPageActive) return;
+    const reloadProfile = refreshProfileOnActivate.current;
+    if (!refreshListOnActivate.current && !reloadProfile) return;
+    refreshListOnActivate.current = false;
+    refreshProfileOnActivate.current = false;
+    if (reloadProfile) void loadLanding();
+    else void loadConversationList();
+  }, [isPageActive, loadConversationList, loadLanding]);
 
   const scrollToBottom = useCallback(() => {
     const el = listRef.current;
@@ -246,7 +294,10 @@ const Messages = () => {
 
   /** Keeps the conversation list (last message, unread badge, order) live without refetching. */
   const applyToList = useCallback((incoming: ChatMessage, viewing: boolean) => {
-    if (!conversationsRef.current.some((c) => c.conversationId === incoming.conversationId)) { void loadConversationList(); return; }
+    if (!conversationsRef.current.some((c) => c.conversationId === incoming.conversationId)) {
+      loadSoon();
+      return;
+    }
     const mine = incoming.senderUserId === meRef.current?.userid;
     const system = isSystem(incoming);
     setConversations((old) => {
@@ -255,7 +306,7 @@ const Messages = () => {
       const updated = { ...row, lastMessage: previewOf(incoming), lastMessageAt: incoming.createdAt, unreadCount: viewing || mine ? 0 : system ? row.unreadCount : row.unreadCount + 1 };
       return [updated, ...old.filter((c) => c.conversationId !== incoming.conversationId)];
     });
-  }, [loadConversationList]);
+  }, [loadSoon]);
 
   const loadChat = useCallback(async (row: ConversationRow) => {
     activeRef.current = row;
@@ -272,7 +323,7 @@ const Messages = () => {
       setBackground(result.data.background || row.background || "");
       setConversations((old) => old.map((c) => c.conversationId === row.conversationId ? { ...c, unreadCount: 0 } : c));
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to load conversation."); }
-  }, []);
+  }, [setError]);
 
   /** The URL (?chat=) is the single source of truth for which chat is open. */
   const openChat = (row: ConversationRow) => {
@@ -289,6 +340,8 @@ const Messages = () => {
   useEffect(() => {
     if (!chatId) {
       activeRef.current = null;
+      // Keep the chat state in sync with browser back/forward navigation.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActive(null); setMessages([]); setShowOptions(false); setShowGroupInfo(false); setDraft(""); setPending(null); setLightbox("");
       return;
     }
@@ -313,10 +366,11 @@ const Messages = () => {
   // ---------------- Live updates (shared socket) ----------------
   useSocketEvent<ChatMessage>("message:new", (incoming) => {
     const current = activeRef.current;
-    const viewing = current?.conversationId === incoming.conversationId;
-    if (viewing) {
+    const sameConversation = current?.conversationId === incoming.conversationId;
+    const viewing = isPageActive && sameConversation;
+    if (sameConversation) {
       appendMessage(incoming);
-      if (!isSystem(incoming) && incoming.senderUserId !== meRef.current?.userid) {
+      if (viewing && !isSystem(incoming) && incoming.senderUserId !== meRef.current?.userid) {
         void api(`/api/messages/${encodeURIComponent(incoming.conversationId)}/read`, { method: "POST" }).catch(() => undefined);
       }
     }

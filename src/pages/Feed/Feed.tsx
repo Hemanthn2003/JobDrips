@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { ArrowUp, Image as ImageIcon, RefreshCw, Sparkles } from "lucide-react";
 import PostCard from "../../components/post/PostCard";
 import { getFeed } from "../../services/postService";
@@ -34,6 +35,11 @@ const idOf = (post: PostData) => `${post.userid}-${post.postId}`;
 const timeOf = (post: PostData) => new Date(post.createdAt || 0).getTime();
 
 const Feed = () => {
+  const { pathname } = useLocation();
+  const pathnameRef = useRef(pathname);
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [viewer, setViewer] = useState<PostPerson | null>(null);
   const [pending, setPending] = useState<PendingFeed | null>(null);
@@ -42,6 +48,7 @@ const Feed = () => {
   const reloadTimer = useRef<number | undefined>(undefined);
   const inFlightLoad = useRef<Promise<void> | null>(null);
   const refreshAfterLoad = useRef(false);
+  const refreshOnActivate = useRef(false);
   const loadFeedRef = useRef<(silent?: boolean) => Promise<void>>(
     () => Promise.resolve(),
   );
@@ -123,6 +130,12 @@ const Feed = () => {
     void loadFeed();
   }, [loadFeed]);
 
+  useEffect(() => {
+    if (pathname !== "/feed" || !refreshOnActivate.current) return;
+    refreshOnActivate.current = false;
+    void loadFeed(true);
+  }, [pathname, loadFeed]);
+
   useEffect(() => () => window.clearTimeout(reloadTimer.current), []);
 
   // New posts may enter this viewer's feed; changes to existing feed posts
@@ -132,6 +145,11 @@ const Feed = () => {
     postId?: string;
     action?: string;
   }>("feed:updated", (payload) => {
+    if (pathname !== "/feed") {
+      refreshOnActivate.current = true;
+      return;
+    }
+
     const isNewPost = payload?.action === "create";
     const isInFeed = postsRef.current.some(
       (post) => post.userid === payload?.ownerId && post.postId === payload?.postId,
@@ -140,6 +158,10 @@ const Feed = () => {
 
     window.clearTimeout(reloadTimer.current);
     reloadTimer.current = window.setTimeout(() => {
+      if (pathnameRef.current !== "/feed") {
+        refreshOnActivate.current = true;
+        return;
+      }
       if (inFlightLoad.current) {
         refreshAfterLoad.current = true;
       } else {

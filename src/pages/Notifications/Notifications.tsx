@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Bell, Trash2 } from "lucide-react";
 import { profileService } from "../../services/profileService";
 import {
@@ -159,6 +159,11 @@ function Row({
 }
 
 const Notifications = () => {
+  const { pathname } = useLocation();
+  const pathnameRef = useRef(pathname);
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
   const { confirm, dialog } = useConfirm();
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -166,39 +171,65 @@ const Notifications = () => {
   const [busyId, setBusyId] = useState("");
   const [clearing, setClearing] = useState(false);
   const reloadTimer = useRef<number | undefined>(undefined);
+  const refreshOnActivate = useRef(false);
+  const loadRequest = useRef<Promise<void> | null>(null);
 
-  const load = useCallback(async () => {
-    setError("");
+  const load = useCallback((markRead = false) => {
+    if (loadRequest.current) return loadRequest.current;
+    const request = Promise.resolve().then(async () => {
+      setError("");
 
-    try {
-      // The server only returns notifications that were not deleted,
-      // so after a delete only brand new ones appear here.
-      setItems(await notificationService.list());
+      try {
+        // The server only returns notifications that were not deleted,
+        // so after a delete only brand new ones appear here.
+        setItems(await notificationService.list());
 
-      // Opening the page clears the red dot; new ones bring it back.
-      await notificationService.markAllRead();
-      setItems((current) => current.map((item) => ({ ...item, read: true })));
-      refreshBadges();
-    } catch (err: unknown) {
-      setError(errText(err, "Unable to load your notifications."));
-    } finally {
-      setLoading(false);
-    }
+        if (markRead) {
+          // Opening the page clears the red dot; new ones bring it back.
+          await notificationService.markAllRead();
+          setItems((current) => current.map((item) => ({ ...item, read: true })));
+          refreshBadges();
+        }
+      } catch (err: unknown) {
+        setError(errText(err, "Unable to load your notifications."));
+      } finally {
+        setLoading(false);
+        if (loadRequest.current === request) loadRequest.current = null;
+      }
+    });
+    loadRequest.current = request;
+    return request;
   }, []);
 
   useEffect(() => {
-    void load();
+    void load(true);
   }, [load]);
+
+  useEffect(() => {
+    if (pathname !== "/notifications" || !refreshOnActivate.current) return;
+    refreshOnActivate.current = false;
+    void load(true);
+  }, [pathname, load]);
 
   const reloadSoon = useCallback(() => {
     window.clearTimeout(reloadTimer.current);
     reloadTimer.current = window.setTimeout(() => {
+      if (pathnameRef.current !== "/notifications") {
+        refreshOnActivate.current = true;
+        return;
+      }
       void load();
     }, 250);
   }, [load]);
 
   useEffect(() => () => window.clearTimeout(reloadTimer.current), []);
-  useSocketEvent("notification:new", reloadSoon);
+  useSocketEvent("notification:new", () => {
+    if (pathname !== "/notifications") {
+      refreshOnActivate.current = true;
+      return;
+    }
+    reloadSoon();
+  });
   useSocketEvent<{ userId?: string }>("notification:read", () => {
     setItems((current) => current.map((item) => ({ ...item, read: true })));
   });

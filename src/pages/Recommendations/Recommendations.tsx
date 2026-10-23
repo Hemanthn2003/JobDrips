@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { X } from "lucide-react";
 
@@ -156,18 +156,25 @@ const Recommendations = () => {
   const [busyId, setBusyId] = useState("");
   const [requested, setRequested] = useState<Set<string>>(() => new Set());
   const [mutualFor, setMutualFor] = useState<Item | null>(null);
+  const loadRequest = useRef<Promise<void> | null>(null);
 
-  const load = useCallback(async () => {
-    setError("");
-    try {
-      const result = await api<ApiResult<{ items: Item[]; needsProfile: boolean }>>("/api/recommendations");
-      setItems(result.data.items);
-      setNeedsProfile(result.data.needsProfile);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to load your recommendations.");
-    } finally {
-      setLoading(false);
-    }
+  const load = useCallback(() => {
+    if (loadRequest.current) return loadRequest.current;
+    const request = Promise.resolve().then(async () => {
+      setError("");
+      try {
+        const result = await api<ApiResult<{ items: Item[]; needsProfile: boolean }>>("/api/recommendations");
+        setItems(result.data.items);
+        setNeedsProfile(result.data.needsProfile);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Unable to load your recommendations.");
+      } finally {
+        setLoading(false);
+        if (loadRequest.current === request) loadRequest.current = null;
+      }
+    });
+    loadRequest.current = request;
+    return request;
   }, []);
 
   useEffect(() => { void load(); }, [load]);
