@@ -579,6 +579,8 @@ export const setPostSave = async (request: Request, response: Response) => {
               ownerProfileImage: owner.profileimage || "",
               caption: post.captions?.content ?? "",
               imageUrl: post.imageUrl ?? {},
+              ...(post.videoUrl ? { videoUrl: post.videoUrl } : {}),
+              ...(post.videoMeta ? { videoMeta: post.videoMeta } : {}),
               hashtags: post.hashtags ?? [],
               createdAt: post.createdAt,
               savedAt: new Date(),

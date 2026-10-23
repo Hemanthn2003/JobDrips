@@ -310,6 +310,55 @@ const serializeProfilePosts = (
     serializePost(post, { viewerId }),
   );
 
+const hydrateSavedVideoPosts = async (savedPosts: unknown[]) => {
+  const records = savedPosts.map((saved) =>
+    saved && typeof saved === "object" && !Array.isArray(saved)
+      ? (saved as UnknownRecord)
+      : null,
+  );
+  const missingMedia = records.flatMap((saved) => {
+    if (
+      !saved ||
+      (typeof saved.videoUrl === "string" && saved.videoUrl.length > 0) ||
+      typeof saved.userid !== "string" ||
+      typeof saved.postId !== "string"
+    ) {
+      return [];
+    }
+    return [{ userid: saved.userid, postId: saved.postId }];
+  });
+
+  if (missingMedia.length === 0) return savedPosts;
+
+  const ownerProfiles = await Profile.find({
+    userid: { $in: [...new Set(missingMedia.map((item) => item.userid))] },
+    "posts.postId": { $in: [...new Set(missingMedia.map((item) => item.postId))] },
+  })
+    .select("userid posts.postId posts.videoUrl posts.videoMeta")
+    .lean();
+
+  const videoByPost = new Map<string, { videoUrl?: string; videoMeta?: unknown }>();
+  for (const owner of ownerProfiles) {
+    for (const post of owner.posts ?? []) {
+      if (!post || typeof post !== "object") continue;
+      const record = post as UnknownRecord;
+      if (typeof record.postId !== "string" || typeof record.videoUrl !== "string") continue;
+      videoByPost.set(`${owner.userid}:${record.postId}`, {
+        videoUrl: record.videoUrl,
+        videoMeta: record.videoMeta,
+      });
+    }
+  }
+
+  return records.map((saved) => {
+    if (!saved || typeof saved.userid !== "string" || typeof saved.postId !== "string") {
+      return saved;
+    }
+    const video = videoByPost.get(`${saved.userid}:${saved.postId}`);
+    return video ? { ...saved, ...video } : saved;
+  });
+};
+
 const getOrCreateProfile = async (
   user: AuthenticatedUser,
 ): Promise<ProfileDocument> => {
@@ -363,6 +412,7 @@ const serializeOwnProfile = async (
     user._id.toString(),
     true,
   );
+  const savedPosts = await hydrateSavedVideoPosts(profile.savedPosts);
 
   return {
     user: {
@@ -389,7 +439,7 @@ const serializeOwnProfile = async (
       posts,
       postsCount: posts.length,
       mentionedPosts: profile.mentionedPosts,
-      savedPosts: profile.savedPosts,
+      savedPosts,
       stories: serializeStories(profile, user._id.toString()),
       createdAt: profile.createdAt,
       updatedAt: profile.updatedAt,
@@ -1281,6 +1331,9 @@ export const getPublicProfile = async (
     const posts = canSeePosts
       ? serializeProfilePosts(allPosts, viewerId, isOwner)
       : [];
+    const savedPosts = isOwner
+      ? await hydrateSavedVideoPosts(target.savedPosts)
+      : [];
 
     response.status(200).json({
       success: true,
@@ -1303,7 +1356,7 @@ export const getPublicProfile = async (
         posts,
         postsCount,
         mentionedPosts: canSeePosts ? target.mentionedPosts : [],
-        savedPosts: isOwner ? target.savedPosts : [],
+        savedPosts,
         stories: canSeePosts ? serializeStories(target, viewerId) : [],
         postAccessRestricted: !canSeePosts,
         createdAt: target.createdAt,

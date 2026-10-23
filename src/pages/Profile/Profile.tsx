@@ -1140,6 +1140,9 @@ function PostGrid({
         const thumbnail = videoUrl
           ? videoThumbnailForPost(videoUrl, storedThumbnail, id, startTime, videoDuration)
           : "";
+        const previewImage = videoUrl
+          ? thumbnail || storedThumbnail || ""
+          : images[0] || "";
 
         return (
           <button
@@ -1149,9 +1152,9 @@ function PostGrid({
             aria-label={caption ? `Open post: ${caption.slice(0, 40)}` : "Open post"}
             className="group relative aspect-square overflow-hidden bg-[#F0DFD3]"
           >
-            {images[0] || thumbnail ? (
+            {previewImage ? (
               <img
-                src={images[0] || thumbnail}
+                src={previewImage}
                 alt={caption || "Post"}
                 loading="lazy"
                 className="h-full w-full object-cover transition duration-300 group-hover:scale-105"

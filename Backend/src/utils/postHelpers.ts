@@ -65,6 +65,9 @@ export interface RawPost {
   captions?: { captionId?: string; content?: string };
   videoUrl?: string;
   videoMeta?: {
+    originalDuration?: number;
+    startTime?: number;
+    endTime?: number;
     duration?: number;
     thumbnailUrl?: string;
     width?: number;
