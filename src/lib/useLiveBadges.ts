@@ -11,7 +11,6 @@ export function useLiveBadges() {
   useSocketEvent("notification:new", () => refreshBadges());
   useSocketEvent("notification:read", () => refreshBadges());
   useSocketEvent("message:new", () => refreshBadges());
-  useSocketEvent("message:read", () => refreshBadges());
   useSocketEvent("conversation:updated", () => refreshBadges());
   useSocketEvent("friend:updated", () => refreshBadges());
   useSocketEvent("connect", () => refreshBadges());

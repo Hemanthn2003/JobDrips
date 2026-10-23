@@ -42,17 +42,54 @@ const snippet = (text: string, length: number): string =>
 
 /** Number of PEOPLE whose messages I have not read yet (not message count). */
 const countUnseenMessagePeople = async (viewerId: string): Promise<number> => {
-  const conversations = await Conversation.find({ "members.userId": viewerId }).select("members messages").lean() as any[];
-  const senders = new Set<string>();
-  for (const conversation of conversations) {
-    const mine = (conversation.members || []).find((m: any) => String(m.userId) === viewerId);
-    const clearedAt = mine?.clearedAt ? new Date(mine.clearedAt).getTime() : 0;
-    for (const message of conversation.messages || []) {
-      const sender = String(message.senderUserId || "");
-      if (sender && sender !== viewerId && new Date(message.createdAt).getTime() > clearedAt && !(message.readBy || []).includes(viewerId)) senders.add(sender);
-    }
-  }
-  return senders.size;
+  const [result] = await Conversation.aggregate<{ count: number }>([
+    { $match: { "members.userId": viewerId } },
+    { $unwind: "$members" },
+    { $match: { "members.userId": viewerId } },
+    {
+      $project: {
+        clearedAt: "$members.clearedAt",
+        messages: {
+          $map: {
+            input: "$messages",
+            as: "message",
+            in: {
+              senderUserId: "$$message.senderUserId",
+              createdAt: "$$message.createdAt",
+              readBy: "$$message.readBy",
+            },
+          },
+        },
+      },
+    },
+    { $unwind: "$messages" },
+    {
+      $match: {
+        $expr: {
+          $and: [
+            { $ne: ["$messages.senderUserId", null] },
+            { $ne: ["$messages.senderUserId", ""] },
+            { $ne: ["$messages.senderUserId", viewerId] },
+            {
+              $gt: [
+                "$messages.createdAt",
+                { $ifNull: ["$clearedAt", new Date(0)] },
+              ],
+            },
+            {
+              $not: [
+                { $in: [viewerId, { $ifNull: ["$messages.readBy", []] }] },
+              ],
+            },
+          ],
+        },
+      },
+    },
+    { $group: { _id: "$messages.senderUserId" } },
+    { $count: "count" },
+  ]);
+
+  return result?.count ?? 0;
 };
 
 // --------------------------------------------------

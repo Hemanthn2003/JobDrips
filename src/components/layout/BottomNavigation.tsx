@@ -141,6 +141,9 @@ const NavigationItem = ({
 const BottomNavigation = () => {
   const summaryRequest = useRef<Promise<NotificationSummary> | null>(null);
   const refreshTimer = useRef<number | undefined>(undefined);
+  const lastSummaryRequestAt = useRef(0);
+  const refreshAfterRequest = useRef(false);
+  const loadSummaryRef = useRef<() => void>(() => {});
   const [summary, setSummary] = useState<NotificationSummary>({
     unreadNotifications: 0,
     unseenMessagePeople: 0,
@@ -158,6 +161,7 @@ const BottomNavigation = () => {
       return;
     }
 
+    lastSummaryRequestAt.current = Date.now();
     const request = notificationService.getSummary();
     summaryRequest.current = request;
     try {
@@ -166,6 +170,16 @@ const BottomNavigation = () => {
       // Signed out or offline: keep the last known badges.
     } finally {
       if (summaryRequest.current === request) summaryRequest.current = null;
+      if (refreshAfterRequest.current) {
+        refreshAfterRequest.current = false;
+        const delay = Math.max(
+          300,
+          1000 - (Date.now() - lastSummaryRequestAt.current),
+        );
+        refreshTimer.current = window.setTimeout(() => {
+          loadSummaryRef.current();
+        }, delay);
+      }
     }
   }, []);
 
@@ -174,17 +188,35 @@ const BottomNavigation = () => {
   }, [loadSummary]);
 
   useEffect(() => {
+    loadSummaryRef.current = () => {
+      void loadSummary();
+    };
+    return () => {
+      loadSummaryRef.current = () => {};
+    };
+  }, [loadSummary]);
+
+  useEffect(() => {
     const onRefresh = () => {
       window.clearTimeout(refreshTimer.current);
+      const delay = Math.max(
+        300,
+        1000 - (Date.now() - lastSummaryRequestAt.current),
+      );
       refreshTimer.current = window.setTimeout(() => {
+        if (summaryRequest.current) {
+          refreshAfterRequest.current = true;
+          return;
+        }
         void loadSummary();
-      }, 200);
+      }, delay);
     };
 
     window.addEventListener(NOTIFICATION_REFRESH_EVENT, onRefresh);
 
     return () => {
       window.clearTimeout(refreshTimer.current);
+      refreshAfterRequest.current = false;
       window.removeEventListener(NOTIFICATION_REFRESH_EVENT, onRefresh);
     };
   }, [loadSummary]);
