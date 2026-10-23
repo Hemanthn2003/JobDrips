@@ -359,6 +359,70 @@ const hydrateSavedVideoPosts = async (savedPosts: unknown[]) => {
   });
 };
 
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const profileMentionedPosts = async (
+  username: string,
+  friendIds: string[],
+  storedPosts: unknown[],
+) => {
+  if (!username || friendIds.length === 0) return storedPosts;
+
+  const friends = (await Profile.find({ userid: { $in: friendIds } })
+    .select("userid posts")
+    .lean()) as Array<{
+      userid: string;
+      username?: string;
+      profileimage?: string;
+      posts?: unknown[];
+    }>;
+  const mentionPattern = new RegExp(
+    `(^|[^A-Za-z0-9_.])@${escapeRegex(username)}(?![A-Za-z0-9_.])`,
+    "i",
+  );
+  const mentionedPosts = new Map<string, unknown>();
+
+  for (const item of storedPosts) {
+    if (
+      item &&
+      typeof item === "object" &&
+      typeof (item as UnknownRecord).postId === "string"
+    ) {
+      mentionedPosts.set(
+        `${String((item as UnknownRecord).userid || "")}:${String((item as UnknownRecord).postId)}`,
+        item,
+      );
+    }
+  }
+
+  for (const friend of friends) {
+    for (const post of friend.posts ?? []) {
+      if (!post || typeof post !== "object") continue;
+      const record = post as UnknownRecord;
+      const captions = record.captions;
+      const caption = Array.isArray(captions)
+        ? captions.map((item) => (item && typeof item === "object" ? String((item as UnknownRecord).content || "") : "")).join(" ")
+        : captions && typeof captions === "object"
+          ? String((captions as UnknownRecord).content || "")
+          : "";
+      if (!mentionPattern.test(caption)) continue;
+
+      const postId = typeof record.postId === "string" ? record.postId : "";
+      if (!postId) continue;
+
+      mentionedPosts.set(`${friend.userid}:${postId}`, {
+        ...record,
+        userid: friend.userid,
+        caption,
+        ownerUsername: friend.username,
+        ownerProfileImage: friend.profileimage || "",
+      });
+    }
+  }
+
+  return [...mentionedPosts.values()];
+};
+
 const getOrCreateProfile = async (
   user: AuthenticatedUser,
 ): Promise<ProfileDocument> => {
@@ -413,6 +477,12 @@ const serializeOwnProfile = async (
     true,
   );
   const savedPosts = await hydrateSavedVideoPosts(profile.savedPosts);
+  const friendIds = friends.map((friend) => friend.userid);
+  const mentionedPosts = await profileMentionedPosts(
+    profile.username,
+    friendIds,
+    profile.mentionedPosts,
+  );
 
   return {
     user: {
@@ -438,7 +508,7 @@ const serializeOwnProfile = async (
       requests,
       posts,
       postsCount: posts.length,
-      mentionedPosts: profile.mentionedPosts,
+      mentionedPosts,
       savedPosts,
       stories: serializeStories(profile, user._id.toString()),
       createdAt: profile.createdAt,
@@ -1334,6 +1404,15 @@ export const getPublicProfile = async (
     const savedPosts = isOwner
       ? await hydrateSavedVideoPosts(target.savedPosts)
       : [];
+    const mentionedPosts = isOwner && canSeePosts
+      ? await profileMentionedPosts(
+          target.username,
+          acceptedFriends.map((friend) => friend.userid),
+          target.mentionedPosts,
+        )
+      : canSeePosts
+        ? target.mentionedPosts
+        : [];
 
     response.status(200).json({
       success: true,
@@ -1355,7 +1434,7 @@ export const getPublicProfile = async (
         friendsCount: acceptedFriends.length,
         posts,
         postsCount,
-        mentionedPosts: canSeePosts ? target.mentionedPosts : [],
+        mentionedPosts,
         savedPosts,
         stories: canSeePosts ? serializeStories(target, viewerId) : [],
         postAccessRestricted: !canSeePosts,

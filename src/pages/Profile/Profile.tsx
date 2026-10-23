@@ -1408,8 +1408,14 @@ const Profile = () => {
       reloadSoon();
     }
   });
-  useSocketEvent<{ ownerId?: string }>("post:updated", (event) => {
-    if (viewedProfileId && event?.ownerId === viewedProfileId) reloadSoon();
+  useSocketEvent<{ ownerId?: string; mentionedUserIds?: string[] }>("post:updated", (event) => {
+    if (
+      viewedProfileId &&
+      (event?.ownerId === viewedProfileId ||
+        event?.mentionedUserIds?.includes(viewedProfileId))
+    ) {
+      reloadSoon();
+    }
   });
   useSocketEvent<{ userId?: string; actorId?: string }>("profile:updated", (event) => {
     if (

@@ -67,7 +67,15 @@ export const emitPostChange = (req: Request, res: Response, next: NextFunction) 
       at: new Date().toISOString(),
     };
     const friends = await friendsOf(ownerId);
-    emitAll([ownerId, actorId, ...friends], "post:updated", payload);
+    const mentionedUserIds = Array.isArray(res.locals.mentionedUserIds)
+      ? res.locals.mentionedUserIds.filter(
+          (userId: unknown): userId is string => typeof userId === "string",
+        )
+      : [];
+    emitAll([ownerId, actorId, ...friends], "post:updated", {
+      ...payload,
+      ...(mentionedUserIds.length > 0 ? { mentionedUserIds } : {}),
+    });
     emitToAllUsers("feed:updated", payload);
   });
   next();

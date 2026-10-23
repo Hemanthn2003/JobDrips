@@ -425,7 +425,34 @@ export const createPost = async (req: Request, res: Response) => {
       { $push: { posts: post }, $set: { updatedAt: new Date() } } as any
     );
     if (result.matchedCount === 0) throw new HttpError(404, "Profile not found.");
- 
+
+    if (mentions.length > 0) {
+      res.locals.mentionedUserIds = mentions.map((mention) => mention.userId);
+      const mentionedPost = {
+        postId: post.postId,
+        userid: userId,
+        caption,
+        captions: { captionId: post.captions[0].captionId, content: caption },
+        imageUrl: post.imageUrl,
+        ...(videoUrl ? { videoUrl } : {}),
+        ...(videoMeta ? { videoMeta } : {}),
+        hashtags,
+        createdAt: post.createdAt,
+      };
+
+      await Promise.all(
+        mentions.map(({ userId: mentionedUserId }) =>
+          Profile.updateOne(
+            {
+              userid: mentionedUserId,
+              "mentionedPosts.postId": { $ne: post.postId },
+            },
+            { $push: { mentionedPosts: mentionedPost } },
+          ),
+        ),
+      );
+    }
+
     /* ---- hashtag counters: exact spelling, +1 if it exists, else create with 1 ---- */
     await Promise.all(
       hashtags.map(async (tag) => {
